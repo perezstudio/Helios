@@ -1,32 +1,29 @@
-//
-//  HeliosApp.swift
-//  Helios
-//
-//  Created by Kevin Perez on 11/7/24.
-//
 
 import SwiftUI
 import SwiftData
+import WebKit
 
 @main
 struct HeliosApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .modelContainer(sharedModelContainer)
-    }
+	let container: ModelContainer
+	
+	init() {
+		do {
+			container = try ModelContainer(
+				for: Profile.self,
+				Workspace.self,
+				BookmarkFolder.self,
+				Tab.self
+			)
+		} catch {
+			fatalError("Failed to create ModelContainer: \(error)")
+		}
+	}
+	
+	var body: some Scene {
+		WindowGroup {
+			MainWindowView()
+		}
+		.modelContainer(container)
+	}
 }
