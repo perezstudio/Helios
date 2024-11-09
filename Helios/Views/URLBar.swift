@@ -33,14 +33,6 @@ struct URLBar: View {
 					.onSubmit {
 						validateAndSubmitURL()
 					}
-					.onChange(of: selectedTab) { _, newTab in
-						// Update URL text when selected tab changes
-						urlText = newTab?.url.absoluteString ?? ""
-					}
-					.onAppear {
-						// Initialize URL text
-						urlText = selectedTab?.url.absoluteString ?? ""
-					}
 				
 				// Progress Indicator and Refresh Button
 				if let tab = selectedTab {
@@ -58,6 +50,21 @@ struct URLBar: View {
 		}
 		.padding(.horizontal)
 		.padding(.vertical, 8)
+		.onChange(of: selectedTab) { _, newTab in
+			// Update URL text when selected tab changes
+			urlText = newTab?.url.absoluteString ?? ""
+		}
+		.onAppear {
+			// Initialize URL text
+			urlText = selectedTab?.url.absoluteString ?? ""
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .webViewURLChanged)) { notification in
+			if let urlChange = notification.object as? WebViewURLChange,
+			   urlChange.tab.id == selectedTab?.id,
+			   !isFocused { // Only update if the text field is not being edited
+				urlText = urlChange.url.absoluteString
+			}
+		}
 	}
 	
 	private func validateAndSubmitURL() {
@@ -97,7 +104,7 @@ struct URLBar: View {
 		}
 		
 		// Update the tab's URL
-		if var tab = selectedTab {
+		if let tab = selectedTab {
 			tab.url = url
 			tab.lastVisited = Date()
 			try? modelContext.save()
@@ -129,4 +136,12 @@ struct URLTextFieldStyle: TextFieldStyle {
 extension Notification.Name {
 	static let webViewStartedLoading = Notification.Name("webViewStartedLoading")
 	static let webViewFinishedLoading = Notification.Name("webViewFinishedLoading")
+	static let webViewCanGoBackChanged = Notification.Name("webViewCanGoBackChanged")
+	static let webViewCanGoForwardChanged = Notification.Name("webViewCanGoForwardChanged")
+	static let webViewURLChanged = Notification.Name("webViewURLChanged")
+}
+
+struct WebViewURLChange {
+	let tab: Tab
+	let url: URL
 }

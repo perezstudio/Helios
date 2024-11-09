@@ -10,21 +10,36 @@ import SwiftData
 
 struct PinnedTabView: View {
 	let tab: Tab
+	let workspace: Workspace
 	let isSelected: Bool
 	let onSelect: () -> Void
+	let onClose: () -> Void
 	@Environment(\.modelContext) private var modelContext
 	
 	private func unpin() {
-		if let workspace = tab.workspace,
-		   let profile = workspace.profile {
+		if let profile = workspace.profile {
 			// Remove from pinned tabs
 			profile.pinnedTabs.removeAll { $0.id == tab.id }
 			
-			// Add to workspace tabs
+			// Add back to workspace tabs
 			workspace.tabs.append(tab)
+			tab.workspace = workspace
 			
 			try? modelContext.save()
 		}
+	}
+	
+	private func closeTab() {
+		// Clean up the WebView
+		WebViewStore.shared.remove(for: tab.id)
+		
+		// Remove from pinned tabs
+		if let profile = workspace.profile {
+			profile.pinnedTabs.removeAll { $0.id == tab.id }
+			try? modelContext.save()
+		}
+		
+		onClose()
 	}
 	
 	var body: some View {
@@ -50,6 +65,12 @@ struct PinnedTabView: View {
 		.contextMenu {
 			Button("Unpin Tab") {
 				unpin()
+			}
+			
+			Divider()
+			
+			Button("Close Tab", role: .destructive) {
+				closeTab()
 			}
 		}
 	}

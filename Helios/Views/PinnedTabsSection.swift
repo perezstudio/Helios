@@ -12,7 +12,6 @@ struct PinnedTabsSection: View {
 	let profile: Profile
 	let workspace: Workspace
 	@Binding var selectedTab: Tab?
-	let onSelectTab: (Tab) -> Void
 	@Environment(\.modelContext) private var modelContext
 	
 	private let columns = [
@@ -25,8 +24,16 @@ struct PinnedTabsSection: View {
 				ForEach(profile.pinnedTabs) { tab in
 					PinnedTabView(
 						tab: tab,
+						workspace: workspace,
 						isSelected: selectedTab?.id == tab.id,
-						onSelect: { onSelectTab(tab) }
+						onSelect: {
+							selectedTab = tab
+						},
+						onClose: {
+							if selectedTab?.id == tab.id {
+								selectedTab = nil
+							}
+						}
 					)
 				}
 			}

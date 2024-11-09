@@ -252,18 +252,13 @@ class WebViewStore {
 	}
 }
 
-// MARK: - Additional Notification Names
-extension Notification.Name {
-	static let webViewCanGoBackChanged = Notification.Name("webViewCanGoBackChanged")
-	static let webViewCanGoForwardChanged = Notification.Name("webViewCanGoForwardChanged")
-}
-
 
 class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 	var parent: WebViewContainer
 	var lastLoadedDate: Date?
 	private var canGoBackObservation: NSKeyValueObservation?
 	private var canGoForwardObservation: NSKeyValueObservation?
+	private var urlObservation: NSKeyValueObservation?
 	
 	init(_ parent: WebViewContainer) {
 		self.parent = parent
@@ -288,6 +283,10 @@ class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 		// Update URL if it changed
 		if let url = webView.url {
 			parent.tab.url = url
+			NotificationCenter.default.post(
+				name: .webViewURLChanged,
+				object: WebViewURLChange(tab: parent.tab, url: url)
+			)
 			try? parent.modelContext.save()
 		}
 		
@@ -313,6 +312,18 @@ class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 			   let iconURL = URL(string: iconURLString) {
 				self?.downloadFavicon(from: iconURL)
 			}
+		}
+	}
+	
+	func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+		// URL often changes before the page finishes loading
+		if let url = webView.url {
+			parent.tab.url = url
+			NotificationCenter.default.post(
+				name: .webViewURLChanged,
+				object: WebViewURLChange(tab: parent.tab, url: url)
+			)
+			try? parent.modelContext.save()
 		}
 	}
 	
@@ -343,10 +354,22 @@ class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 				object: (self.parent.tab.id, webView.canGoForward)
 			)
 		}
+		
+		// Also observe URL changes directly
+		urlObservation = webView.observe(\.url) { [weak self] webView, _ in
+			guard let self = self, let url = webView.url else { return }
+			self.parent.tab.url = url
+			NotificationCenter.default.post(
+				name: .webViewURLChanged,
+				object: WebViewURLChange(tab: self.parent.tab, url: url)
+			)
+			try? self.parent.modelContext.save()
+		}
 	}
 	
 	deinit {
 		canGoBackObservation?.invalidate()
 		canGoForwardObservation?.invalidate()
+		urlObservation?.invalidate()
 	}
 }

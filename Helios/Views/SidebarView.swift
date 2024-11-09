@@ -15,18 +15,6 @@ struct SidebarView: View {
 	@State private var showingNewWorkspaceSheet = false
 	@Query private var profiles: [Profile]
 	
-	func selectTab(_ tab: Tab) {
-		// Ensure proper workspace is selected
-		if let workspace = tab.workspace {
-			selectedWorkspace = workspace
-		}
-		selectedTab = tab
-		
-		// Update last visited time
-		tab.lastVisited = Date()
-		try? tab.modelContext?.save()
-	}
-	
 	var body: some View {
 		VStack(spacing: 0) {
 			// URL Bar
@@ -40,8 +28,7 @@ struct SidebarView: View {
 				PinnedTabsSection(
 					profile: profile,
 					workspace: workspace,
-					selectedTab: $selectedTab,
-					onSelectTab: selectTab
+					selectedTab: $selectedTab
 				)
 				
 				// Bookmark folders section
@@ -53,8 +40,7 @@ struct SidebarView: View {
 				// Workspace tabs section
 				WorkspaceTabsSection(
 					workspace: workspace,
-					selectedTab: $selectedTab,
-					onSelectTab: selectTab
+					selectedTab: $selectedTab
 				)
 			}
 			
