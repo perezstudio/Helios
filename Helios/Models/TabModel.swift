@@ -27,15 +27,21 @@ final class Tab {
 			URL(string: urlString) ?? URL(string: "about:blank")!
 		}
 		set {
-			urlString = newValue.absoluteString
-			// Update security status based on URL scheme
-			isSecure = newValue.scheme?.lowercased() == "https"
+			// Only update URL if this tab isn't pinned
+			if !isPinned {
+				urlString = newValue.absoluteString
+				isSecure = newValue.scheme?.lowercased() == "https"
+			}
 		}
 	}
 	
 	var workspace: Workspace? {
 		get { workspaceRelationship }
 		set { workspaceRelationship = newValue }
+	}
+	
+	var isPinned: Bool {
+		workspace?.profile?.pinnedTabs.contains { $0.id == id } ?? false
 	}
 	
 	init(title: String, url: URL, workspace: Workspace? = nil) {
@@ -45,6 +51,55 @@ final class Tab {
 		self.lastVisited = Date()
 		self.workspaceRelationship = workspace
 		self.isSecure = url.scheme?.lowercased() == "https"
+	}
+	
+	func pin() {
+		if let profile = workspace?.profile {
+			// Check if already pinned
+			guard !isPinned else { return }
+			
+			// Store current state
+			let currentURL = url
+			let currentTitle = title
+			let currentFavicon = favicon
+			
+			// Add to pinned tabs
+			profile.pinnedTabs.append(self)
+			
+			// Remove from workspace tabs
+			workspace?.removeTab(self)
+			
+			// Ensure state is preserved
+			self.urlString = currentURL.absoluteString
+			self.title = currentTitle
+			self.favicon = currentFavicon
+		}
+	}
+	
+	func unpin() {
+		if let profile = workspace?.profile,
+		   let workspace = workspace {
+			// Check if already unpinned
+			guard isPinned else { return }
+			
+			// Store current state
+			let currentURL = url
+			let currentTitle = title
+			let currentFavicon = favicon
+			
+			// Remove from pinned tabs
+			profile.pinnedTabs.removeAll { $0.id == id }
+			
+			// Add back to workspace tabs
+			if !workspace.tabs.contains(where: { $0.id == id }) {
+				workspace.tabs.append(self)
+			}
+			
+			// Ensure state is preserved
+			self.urlString = currentURL.absoluteString
+			self.title = currentTitle
+			self.favicon = currentFavicon
+		}
 	}
 }
 
@@ -59,7 +114,7 @@ struct TabTransferID: Transferable, Codable {
 
 extension UTType {
 	static var tabID: UTType {
-		UTType(exportedAs: "com.yourdomain.tab-id")
+		UTType(exportedAs: "com.kevinperez.Helios.tab-id")
 	}
 }
 
@@ -89,6 +144,10 @@ extension Tab {
 	}
 	
 	func close() {
+		// Remove from pinned tabs if pinned
+		if let profile = workspace?.profile {
+			profile.pinnedTabs.removeAll { $0.id == id }
+		}
 		workspace?.removeTab(self)
 	}
 	

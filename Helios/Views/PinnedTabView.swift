@@ -11,37 +11,46 @@ import SwiftData
 struct PinnedTabView: View {
 	let tab: Tab
 	let isSelected: Bool
+	let onSelect: () -> Void
+	@Environment(\.modelContext) private var modelContext
+	
+	private func unpin() {
+		if let workspace = tab.workspace,
+		   let profile = workspace.profile {
+			// Remove from pinned tabs
+			profile.pinnedTabs.removeAll { $0.id == tab.id }
+			
+			// Add to workspace tabs
+			workspace.tabs.append(tab)
+			
+			try? modelContext.save()
+		}
+	}
 	
 	var body: some View {
-		VStack(spacing: 4) {
-			if let favicon = tab.favicon,
-			   let image = NSImage(data: favicon) {
-				Image(nsImage: image)
-					.resizable()
-					.frame(width: 16, height: 16)
-			} else {
-				Image(systemName: "globe")
-					.frame(width: 16, height: 16)
+		Button(action: onSelect) {
+			VStack {
+				if let favicon = tab.favicon,
+				   let image = NSImage(data: favicon) {
+					Image(nsImage: image)
+						.resizable()
+						.frame(width: 20, height: 20)
+				} else {
+					Image(systemName: "globe")
+						.font(.system(size: 16))
+				}
 			}
-			
-			Text(tab.title)
-				.font(.caption)
-				.lineLimit(1)
-				.frame(width: 60)
 		}
-		.padding(.vertical, 4)
-		.padding(.horizontal, 8)
-		.background(
-			RoundedRectangle(cornerRadius: 6)
-				.fill(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
-		)
-		.background(
-			RoundedRectangle(cornerRadius: 6)
-				.fill(Color.secondary.opacity(0.0001)) // nearly transparent interactive area
-		)
-		.overlay(
-			RoundedRectangle(cornerRadius: 6)
-				.stroke(Color.accentColor.opacity(isSelected ? 0.5 : 0), lineWidth: 1)
-		)
+		.buttonStyle(.plain)
+		.frame(width: 40, height: 40)
+		.background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+		.clipShape(RoundedRectangle(cornerRadius: 6))
+		.contentShape(Rectangle())
+		.help(tab.title)
+		.contextMenu {
+			Button("Unpin Tab") {
+				unpin()
+			}
+		}
 	}
 }

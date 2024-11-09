@@ -10,26 +10,27 @@ import SwiftData
 
 struct PinnedTabsSection: View {
 	let profile: Profile
+	let workspace: Workspace
 	@Binding var selectedTab: Tab?
+	let onSelectTab: (Tab) -> Void
+	@Environment(\.modelContext) private var modelContext
+	
+	private let columns = [
+		GridItem(.adaptive(minimum: 40, maximum: 40), spacing: 4)
+	]
 	
 	var body: some View {
-		Section("Pinned") {
-			ScrollView(.horizontal, showsIndicators: false) {
-				LazyHStack(spacing: 8) {
-					ForEach(profile.pinnedTabs) { tab in
-						PinnedTabView(
-							tab: tab,
-							isSelected: tab.id == selectedTab?.id
-						)
-						.onTapGesture {
-							selectedTab = tab
-						}
-					}
+		Section {
+			LazyVGrid(columns: columns, spacing: 4) {
+				ForEach(profile.pinnedTabs) { tab in
+					PinnedTabView(
+						tab: tab,
+						isSelected: selectedTab?.id == tab.id,
+						onSelect: { onSelectTab(tab) }
+					)
 				}
-				.padding(.horizontal, 12)
-				.padding(.vertical, 4)
 			}
-			.frame(height: 56)
+			.padding(8)
 		}
 	}
 }

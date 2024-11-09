@@ -8,7 +8,6 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - Navigation Controls
 struct NavigationControls: View {
 	@Binding var selectedTab: Tab?
 	@State private var canGoBack = false
@@ -45,12 +44,14 @@ struct NavigationControls: View {
 			.help(isLoading ? "Stop Loading" : "Refresh Page")
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .webViewStartedLoading)) { notification in
-			if let loadingTab = notification.object as? Tab, loadingTab.id == selectedTab?.id {
+			if let loadingTab = notification.object as? Tab,
+			   loadingTab.id == selectedTab?.id {
 				isLoading = true
 			}
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .webViewFinishedLoading)) { notification in
-			if let loadingTab = notification.object as? Tab, loadingTab.id == selectedTab?.id {
+			if let loadingTab = notification.object as? Tab,
+			   loadingTab.id == selectedTab?.id {
 				isLoading = false
 			}
 		}
@@ -84,6 +85,7 @@ struct NavigationControls: View {
 			webViewStore.stopLoading(for: tab.id)
 			isLoading = false
 		} else {
+			webViewStore.reload(for: tab.id)
 			tab.lastVisited = Date()
 			try? modelContext.save()
 		}

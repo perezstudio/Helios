@@ -15,6 +15,7 @@ struct NewTabSheet: View {
 	@State private var urlString = ""
 	@State private var showError = false
 	@State private var errorMessage = ""
+	var onTabCreated: ((Tab) -> Void)? = nil
 	
 	private func validateAndCreateURL(_ input: String) -> URL? {
 		// If the input already starts with a scheme, use it as is
@@ -51,9 +52,14 @@ struct NewTabSheet: View {
 			return
 		}
 		
-		let tab = Tab(title: url.host ?? "New Tab", url: url)
-		workspace.tabs.append(tab)
+		// Create a new tab with the validated URL
+		let newTab = Tab(title: url.host ?? "New Tab", url: url)
+		workspace.tabs.append(newTab)
+		newTab.workspace = workspace // Ensure workspace relationship is set
 		try? modelContext.save()
+		
+		// Call the callback with the new tab
+		onTabCreated?(newTab)
 		dismiss()
 	}
 	

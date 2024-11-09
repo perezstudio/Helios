@@ -13,8 +13,19 @@ struct SidebarView: View {
 	@Binding var selectedWorkspace: Workspace?
 	@Binding var selectedTab: Tab?
 	@State private var showingNewWorkspaceSheet = false
-	@State private var showingNewTabSheet = false
 	@Query private var profiles: [Profile]
+	
+	func selectTab(_ tab: Tab) {
+		// Ensure proper workspace is selected
+		if let workspace = tab.workspace {
+			selectedWorkspace = workspace
+		}
+		selectedTab = tab
+		
+		// Update last visited time
+		tab.lastVisited = Date()
+		try? tab.modelContext?.save()
+	}
 	
 	var body: some View {
 		VStack(spacing: 0) {
@@ -23,22 +34,15 @@ struct SidebarView: View {
 			
 			Divider()
 			
-			if let workspace = selectedWorkspace {
-				// Add new tab button
-				Button(action: { showingNewTabSheet = true }) {
-					Label("New Tab", systemImage: "plus.rectangle")
-				}
-				.buttonStyle(.bordered)
-				.padding(.horizontal)
-				.padding(.vertical, 8)
-				
+			if let workspace = selectedWorkspace,
+			   let profile = workspace.profile {
 				// Pinned tabs section
-				if let profile = workspace.profile {
-					PinnedTabsSection(
-						profile: profile,
-						selectedTab: $selectedTab
-					)
-				}
+				PinnedTabsSection(
+					profile: profile,
+					workspace: workspace,
+					selectedTab: $selectedTab,
+					onSelectTab: selectTab
+				)
 				
 				// Bookmark folders section
 				BookmarkFoldersSection(
@@ -49,7 +53,8 @@ struct SidebarView: View {
 				// Workspace tabs section
 				WorkspaceTabsSection(
 					workspace: workspace,
-					selectedTab: $selectedTab
+					selectedTab: $selectedTab,
+					onSelectTab: selectTab
 				)
 			}
 			
@@ -70,11 +75,5 @@ struct SidebarView: View {
 		.sheet(isPresented: $showingNewWorkspaceSheet) {
 			NewWorkspaceSheet()
 		}
-		.sheet(isPresented: $showingNewTabSheet) {
-			if let workspace = selectedWorkspace {
-				NewTabSheet(workspace: workspace)
-			}
-		}
 	}
 }
-

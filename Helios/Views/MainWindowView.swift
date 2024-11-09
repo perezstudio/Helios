@@ -14,6 +14,8 @@ struct MainWindowView: View {
 	@State private var selectedProfile: Profile?
 	@State private var selectedWorkspace: Workspace?
 	@State private var selectedTab: Tab?
+	@State private var showingNewTabSheet = false
+	@State private var showingNewProfileSheet = false
 	
 	var body: some View {
 		NavigationSplitView {
@@ -29,12 +31,43 @@ struct MainWindowView: View {
 				}
 			}
 		} detail: {
-			if let tab = selectedTab {
-				WebViewContainer(tab: tab)
-			} else {
-				ContentUnavailableView("Select a tab",
-					systemImage: "globe")
+			ZStack {
+				if let tab = selectedTab {
+					WebViewContainer(tab: tab, modelContext: modelContext)
+				} else {
+					EmptyStateView(
+						workspace: selectedWorkspace,
+						onCreateTab: { showingNewTabSheet = true }
+					)
+				}
 			}
+			.sheet(isPresented: $showingNewTabSheet) {
+				if let workspace = selectedWorkspace {
+					NewTabSheet(workspace: workspace) { newTab in
+						selectedTab = newTab
+					}
+				}
+			}
+		}
+		.sheet(isPresented: $showingNewProfileSheet) {
+			NewProfileSheet()
+				.onDisappear {
+					// Select the newly created profile if no profile is selected
+					if selectedProfile == nil, let lastProfile = profiles.last {
+						selectedProfile = lastProfile
+						if let firstWorkspace = lastProfile.workspaces.first {
+							selectedWorkspace = firstWorkspace
+						}
+					}
+				}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .openNewTab)) { _ in
+			if selectedWorkspace != nil {
+				showingNewTabSheet = true
+			}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .openNewProfile)) { _ in
+			showingNewProfileSheet = true
 		}
 	}
 }
