@@ -19,6 +19,8 @@ struct WebViewContainer: NSViewRepresentable {
 		config.preferences.javaScriptCanOpenWindowsAutomatically = true
 		config.preferences.isElementFullscreenEnabled = true
 		
+		config.applicationNameForUserAgent = "Version/17.2.1 Safari/605.1.15"
+		
 		let webView = WKWebView(frame: .zero, configuration: config)
 		webView.allowsMagnification = true
 		webView.allowsBackForwardNavigationGestures = true

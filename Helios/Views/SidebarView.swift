@@ -17,14 +17,16 @@ struct SidebarView: View {
 	
 	private func selectTab(_ tab: Tab) {
 		// Ensure proper state update order
-		if tab.workspace !== selectedWorkspace {
-			selectedWorkspace = tab.workspace
+		if let workspace = tab.workspace {
+			selectedWorkspace = workspace
+			selectedProfile = workspace.profile
 		}
 		selectedTab = tab
 		
 		// Update last visited time
 		tab.lastVisited = Date()
 		try? tab.modelContext?.save()
+		
 	}
 	
 	var body: some View {
@@ -36,8 +38,6 @@ struct SidebarView: View {
 					set: { newTab in
 						if let tab = newTab {
 							selectTab(tab)
-						} else {
-							selectedTab = nil
 						}
 					}
 				)
@@ -56,8 +56,6 @@ struct SidebarView: View {
 						set: { newTab in
 							if let tab = newTab {
 								selectTab(tab)
-							} else {
-								selectedTab = nil
 							}
 						}
 					)
@@ -71,8 +69,6 @@ struct SidebarView: View {
 						set: { newTab in
 							if let tab = newTab {
 								selectTab(tab)
-							} else {
-								selectedTab = nil
 							}
 						}
 					)
@@ -86,8 +82,6 @@ struct SidebarView: View {
 						set: { newTab in
 							if let tab = newTab {
 								selectTab(tab)
-							} else {
-								selectedTab = nil
 							}
 						}
 					),
