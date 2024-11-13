@@ -18,6 +18,11 @@ struct URLBar: View {
 	@FocusState private var isFocused: Bool
 	@State private var urlError: String?
 	
+	private func updateURLText(from url: URL) {
+		// Show the complete URL path
+		urlText = url.absoluteString
+	}
+	
 	var body: some View {
 		VStack(alignment: .leading, spacing: 4) {
 			HStack(spacing: 8) {
@@ -32,6 +37,13 @@ struct URLBar: View {
 					.focused($isFocused)
 					.onSubmit {
 						validateAndSubmitURL()
+					}
+					.onChange(of: isFocused) { _, newValue in
+						isEditing = newValue
+						if !newValue {
+							// Reset to current URL if unfocused without submitting
+							urlText = selectedTab?.url.absoluteString ?? ""
+						}
 					}
 				
 				// Progress Indicator and Refresh Button
@@ -52,17 +64,21 @@ struct URLBar: View {
 		.padding(.vertical, 8)
 		.onChange(of: selectedTab) { _, newTab in
 			// Update URL text when selected tab changes
-			urlText = newTab?.url.absoluteString ?? ""
+			if let url = newTab?.url {
+				updateURLText(from: url)
+			}
 		}
 		.onAppear {
 			// Initialize URL text
-			urlText = selectedTab?.url.absoluteString ?? ""
+			if let url = selectedTab?.url {
+				updateURLText(from: url)
+			}
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .webViewURLChanged)) { notification in
 			if let urlChange = notification.object as? WebViewURLChange,
 			   urlChange.tab.id == selectedTab?.id,
-			   !isFocused { // Only update if the text field is not being edited
-				urlText = urlChange.url.absoluteString
+			   !isFocused {  // Only update if not being edited
+				updateURLText(from: urlChange.url)
 			}
 		}
 	}
@@ -122,6 +138,8 @@ struct URLTextFieldStyle: TextFieldStyle {
 	
 	func _body(configuration: TextField<Self._Label>) -> some View {
 		configuration
+			.textFieldStyle(.plain)
+			.font(.body.monospaced())
 			.padding(8)
 			.background(Color(.windowBackgroundColor).opacity(0.5))
 			.cornerRadius(8)
@@ -129,7 +147,6 @@ struct URLTextFieldStyle: TextFieldStyle {
 				RoundedRectangle(cornerRadius: 8)
 					.stroke(Color.secondary.opacity(0.2), lineWidth: 1)
 			)
-			.font(.system(.body, design: .monospaced))
 	}
 }
 

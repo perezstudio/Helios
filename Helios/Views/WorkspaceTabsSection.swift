@@ -11,6 +11,7 @@ import SwiftData
 struct WorkspaceTabsSection: View {
 	let workspace: Workspace
 	@Binding var selectedTab: Tab?
+	let onCreateTab: (Tab) -> Void
 	@State private var showingProfileChangeSheet = false
 	@State private var showingNewTabSheet = false
 	@Environment(\.modelContext) private var modelContext
@@ -75,7 +76,14 @@ struct WorkspaceTabsSection: View {
 		}
 		.sheet(isPresented: $showingNewTabSheet) {
 			NewTabSheet(workspace: workspace) { newTab in
-				selectedTab = newTab
+				onCreateTab(newTab)
+			}
+		}
+		// Verify selected tab is still valid
+		.onChange(of: workspace.tabs) { oldValue, newValue in
+			if let currentTab = selectedTab,
+			   !newValue.contains(where: { $0.id == currentTab.id }) {
+				selectedTab = nil
 			}
 		}
 	}

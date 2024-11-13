@@ -9,36 +9,6 @@ import SwiftUI
 import SwiftData
 import WebKit
 
-class WebContainerView: NSView {
-	var currentTabID: UUID?
-	weak var webView: WKWebView? {
-		willSet {
-			guard webView !== newValue else { return }
-			webView?.removeFromSuperview()
-		}
-		didSet {
-			guard webView?.superview !== self else { return }
-			if let webView = webView {
-				addSubview(webView)
-				webView.frame = bounds
-				webView.autoresizingMask = [.width, .height]
-			}
-		}
-	}
-	
-	func setWebView(_ webView: WKWebView?, for tabID: UUID) {
-		guard currentTabID != tabID else { return }
-		currentTabID = tabID
-		self.webView = webView
-	}
-	
-	override func layout() {
-		super.layout()
-		webView?.frame = bounds
-	}
-}
-
-// MARK: - WebView Container
 struct WebViewContainer: NSViewRepresentable {
 	let tab: Tab
 	let modelContext: ModelContext
@@ -55,9 +25,9 @@ struct WebViewContainer: NSViewRepresentable {
 		webView.navigationDelegate = coordinator
 		webView.uiDelegate = coordinator
 		
+		print("Loading URL: \(tab.url) for tab: \(tab.id)")
 		let request = URLRequest(url: tab.url)
 		webView.load(request)
-		coordinator.observeNavigationState(webView)
 		
 		return webView
 	}
@@ -65,51 +35,73 @@ struct WebViewContainer: NSViewRepresentable {
 	func makeNSView(context: Context) -> WebContainerView {
 		print("Creating container for tab: \(tab.id)")
 		let containerView = WebContainerView()
+		containerView.frame = NSRect(x: 0, y: 0, width: 800, height: 600) // Set initial size
 		
-		// Get or create WebView
+		let coordinator = context.coordinator
+		
+		// Use the tab's ID as the key for the WebView
 		let webView = WebViewStore.shared.getOrCreateWebView(
 			for: tab.id,
-			createWebView: { createWebView(coordinator: context.coordinator) }
+			createWebView: { createWebView(coordinator: coordinator) }
 		)
 		
-		// Set the WebView
-		containerView.setWebView(webView, for: tab.id)
+		containerView.webView = webView
+		coordinator.setCurrentWebView(webView)
+		coordinator.tabID = tab.id // Set the tabID in the coordinator
+		
 		return containerView
 	}
 	
 	func updateNSView(_ containerView: WebContainerView, context: Context) {
-		print("Updating container for tab: \(tab.id)")
-		
-		// Get existing WebView or create new one
-		let webView = WebViewStore.shared.getOrCreateWebView(
-			for: tab.id,
-			createWebView: { createWebView(coordinator: context.coordinator) }
-		)
-		
-		// Update container's WebView if tab changed
-		containerView.setWebView(webView, for: tab.id)
-		
-		// Only reload if URL changed and tab is not loading
-		if webView.url != tab.url && !WebViewStore.shared.isTabLoading(tab.id) {
-			print("Loading URL: \(tab.url) in tab: \(tab.id)")
-			WebViewStore.shared.load(url: tab.url, for: tab.id)
-			context.coordinator.lastLoadedDate = Date()
+			print("Updating container for tab: \(tab.id)")
+			
+			let coordinator = context.coordinator
+			
+			// Ensure we're using the correct WebView for this tab
+			let webView = WebViewStore.shared.getOrCreateWebView(
+				for: tab.id,
+				createWebView: { createWebView(coordinator: coordinator) }
+			)
+			
+			// Only update the WebView if it's different from the current one
+			if containerView.webView !== webView {
+				containerView.webView = webView
+				coordinator.setCurrentWebView(webView)
+				coordinator.tabID = tab.id // Update the tabID in the coordinator
+			}
+			
+			// Ensure proper frame setup
+			webView.frame = containerView.bounds
+			webView.autoresizingMask = [.width, .height]
+			
+			// Force layout update
+			containerView.layout()
 		}
-	}
 	
-	static func dismantleNSView(_ containerView: WebContainerView, coordinator: Coordinator) {
-		let tabID = coordinator.parent.tab.id
+	static func dismantleNSView(_ containerView: WebContainerView, coordinator: WebViewCoordinator) {
+		let tabID = coordinator.tabID
 		print("Dismantling container for tab: \(tabID)")
 		
-		if !coordinator.parent.tab.isPinned {
+		// Get tab to check if it's pinned
+		guard let tab = coordinator.getTab() else {
+			// If we can't get the tab, clean up anyway
 			WebViewStore.shared.remove(for: tabID)
 			containerView.webView = nil
-			containerView.currentTabID = nil
+			coordinator.clearWebView()
+			return
+		}
+		
+		if !tab.isPinned {
+			WebViewStore.shared.remove(for: tabID)
+			containerView.webView = nil
+			coordinator.clearWebView()
 		}
 	}
 	
 	func makeCoordinator() -> WebViewCoordinator {
-		WebViewCoordinator(self)
+		let coordinator = WebViewCoordinator(self)
+		print("Created new coordinator for tab: \(tab.id)")
+		return coordinator
 	}
 }
 
@@ -126,250 +118,16 @@ extension URL {
 	}
 }
 
-// MARK: - WebView Store
+// MARK: - Coordinator ID Store
+private var coordinatorIDKey: UInt8 = 0
 
-import WebKit
-
-class WebViewStore {
-	static let shared = WebViewStore()
-	private var webViews: [UUID: WKWebView] = [:]
-	private var activeTabID: UUID?
-	private var loadingTabIDs: Set<UUID> = []
-	private var lastURLs: [UUID: URL] = [:]
-	
-	private init() {}
-	
-	func getOrCreateWebView(for tabID: UUID, createWebView: () -> WKWebView) -> WKWebView {
-		print("Getting or creating WebView for tab: \(tabID)")
-		
-		// Return existing WebView if available
-		if let existingWebView = webViews[tabID] {
-			return existingWebView
+extension WKWebView {
+	var associatedCoordinatorID: UUID? {
+		get {
+			return objc_getAssociatedObject(self, &coordinatorIDKey) as? UUID
 		}
-		
-		// Create new WebView
-		let webView = createWebView()
-		store(webView, for: tabID)
-		return webView
-	}
-	
-	func store(_ webView: WKWebView, for tabID: UUID) {
-		print("Storing WebView for tab: \(tabID)")
-		
-		// Clean up existing WebView if different
-		if let existingWebView = webViews[tabID], existingWebView !== webView {
-			cleanupWebView(existingWebView)
-			webViews.removeValue(forKey: tabID)
-			lastURLs.removeValue(forKey: tabID)
+		set {
+			objc_setAssociatedObject(self, &coordinatorIDKey, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
 		}
-		
-		webViews[tabID] = webView
-		lastURLs[tabID] = webView.url
-		activeTabID = tabID
-	}
-	
-	func remove(for tabID: UUID) {
-		print("Removing WebView for tab: \(tabID)")
-		if let webView = webViews[tabID] {
-			cleanupWebView(webView)
-			webViews.removeValue(forKey: tabID)
-			lastURLs.removeValue(forKey: tabID)
-			loadingTabIDs.remove(tabID)
-			
-			if activeTabID == tabID {
-				activeTabID = nil
-			}
-		}
-	}
-	
-	private func cleanupWebView(_ webView: WKWebView) {
-		webView.stopLoading()
-		webView.navigationDelegate = nil
-		webView.uiDelegate = nil
-		webView.removeFromSuperview()
-	}
-	
-	func load(url: URL, for tabID: UUID) {
-		guard let webView = webViews[tabID],
-			  !isTabLoading(tabID),
-			  lastURLs[tabID] != url else {
-			return
-		}
-		
-		print("Loading URL: \(url) in tab: \(tabID)")
-		markTabLoading(tabID)
-		lastURLs[tabID] = url
-		let request = URLRequest(url: url)
-		webView.load(request)
-	}
-	
-	func isTabLoading(_ tabID: UUID) -> Bool {
-		return loadingTabIDs.contains(tabID)
-	}
-	
-	func markTabLoading(_ tabID: UUID) {
-		loadingTabIDs.insert(tabID)
-	}
-	
-	func markTabFinishedLoading(_ tabID: UUID) {
-		loadingTabIDs.remove(tabID)
-	}
-	
-	// Navigation methods
-	func goBack(for tabID: UUID) {
-		guard let webView = webViews[tabID], webView.canGoBack else { return }
-		webView.goBack()
-	}
-	
-	func goForward(for tabID: UUID) {
-		guard let webView = webViews[tabID], webView.canGoForward else { return }
-		webView.goForward()
-	}
-	
-	func stopLoading(for tabID: UUID) {
-		if let webView = webViews[tabID] {
-			webView.stopLoading()
-			markTabFinishedLoading(tabID)
-		}
-	}
-	
-	func reload(for tabID: UUID) {
-		guard let webView = webViews[tabID], !isTabLoading(tabID) else { return }
-		markTabLoading(tabID)
-		webView.reload()
-	}
-	
-	func cleanup() {
-		print("Cleaning up all WebViews")
-		for (tabID, webView) in webViews {
-			cleanupWebView(webView)
-			print("Cleaned up WebView for tab: \(tabID)")
-		}
-		webViews.removeAll()
-		lastURLs.removeAll()
-		loadingTabIDs.removeAll()
-		activeTabID = nil
-	}
-}
-
-
-class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-	var parent: WebViewContainer
-	var lastLoadedDate: Date?
-	private var canGoBackObservation: NSKeyValueObservation?
-	private var canGoForwardObservation: NSKeyValueObservation?
-	private var urlObservation: NSKeyValueObservation?
-	
-	init(_ parent: WebViewContainer) {
-		self.parent = parent
-		super.init()
-	}
-	
-	func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-		print("Started loading for tab: \(parent.tab.id)")
-		NotificationCenter.default.post(
-			name: .webViewStartedLoading,
-			object: parent.tab
-		)
-	}
-	
-	func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-		print("Finished loading for tab: \(parent.tab.id)")
-		NotificationCenter.default.post(
-			name: .webViewFinishedLoading,
-			object: parent.tab
-		)
-		
-		// Update URL if it changed
-		if let url = webView.url {
-			parent.tab.url = url
-			NotificationCenter.default.post(
-				name: .webViewURLChanged,
-				object: WebViewURLChange(tab: parent.tab, url: url)
-			)
-			try? parent.modelContext.save()
-		}
-		
-		// Update tab title
-		webView.evaluateJavaScript("document.title") { [weak self] (result, error) in
-			if let title = result as? String {
-				DispatchQueue.main.async {
-					self?.parent.tab.title = title
-					try? self?.parent.modelContext.save()
-				}
-			}
-		}
-		
-		// Get favicon
-		webView.evaluateJavaScript("""
-			var link = document.querySelector("link[rel~='icon']");
-			if (!link) {
-				link = document.querySelector("link[rel~='shortcut icon']");
-			}
-			link ? link.href : null;
-		""") { [weak self] (result, error) in
-			if let iconURLString = result as? String,
-			   let iconURL = URL(string: iconURLString) {
-				self?.downloadFavicon(from: iconURL)
-			}
-		}
-	}
-	
-	func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-		// URL often changes before the page finishes loading
-		if let url = webView.url {
-			parent.tab.url = url
-			NotificationCenter.default.post(
-				name: .webViewURLChanged,
-				object: WebViewURLChange(tab: parent.tab, url: url)
-			)
-			try? parent.modelContext.save()
-		}
-	}
-	
-	private func downloadFavicon(from url: URL) {
-		URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
-			if let data = data {
-				DispatchQueue.main.async {
-					self?.parent.tab.favicon = data
-					try? self?.parent.modelContext.save()
-				}
-			}
-		}.resume()
-	}
-	
-	func observeNavigationState(_ webView: WKWebView) {
-		canGoBackObservation = webView.observe(\.canGoBack) { [weak self] webView, _ in
-			guard let self = self else { return }
-			NotificationCenter.default.post(
-				name: .webViewCanGoBackChanged,
-				object: (self.parent.tab.id, webView.canGoBack)
-			)
-		}
-		
-		canGoForwardObservation = webView.observe(\.canGoForward) { [weak self] webView, _ in
-			guard let self = self else { return }
-			NotificationCenter.default.post(
-				name: .webViewCanGoForwardChanged,
-				object: (self.parent.tab.id, webView.canGoForward)
-			)
-		}
-		
-		// Also observe URL changes directly
-		urlObservation = webView.observe(\.url) { [weak self] webView, _ in
-			guard let self = self, let url = webView.url else { return }
-			self.parent.tab.url = url
-			NotificationCenter.default.post(
-				name: .webViewURLChanged,
-				object: WebViewURLChange(tab: self.parent.tab, url: url)
-			)
-			try? self.parent.modelContext.save()
-		}
-	}
-	
-	deinit {
-		canGoBackObservation?.invalidate()
-		canGoForwardObservation?.invalidate()
-		urlObservation?.invalidate()
 	}
 }

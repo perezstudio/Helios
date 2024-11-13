@@ -15,10 +15,33 @@ struct SidebarView: View {
 	@State private var showingNewWorkspaceSheet = false
 	@Query private var profiles: [Profile]
 	
+	private func selectTab(_ tab: Tab) {
+		// Ensure proper state update order
+		if tab.workspace !== selectedWorkspace {
+			selectedWorkspace = tab.workspace
+		}
+		selectedTab = tab
+		
+		// Update last visited time
+		tab.lastVisited = Date()
+		try? tab.modelContext?.save()
+	}
+	
 	var body: some View {
 		VStack(spacing: 0) {
 			// URL Bar
-			URLBar(selectedTab: $selectedTab)
+			URLBar(
+				selectedTab: Binding(
+					get: { selectedTab },
+					set: { newTab in
+						if let tab = newTab {
+							selectTab(tab)
+						} else {
+							selectedTab = nil
+						}
+					}
+				)
+			)
 			
 			Divider()
 			
@@ -28,19 +51,49 @@ struct SidebarView: View {
 				PinnedTabsSection(
 					profile: profile,
 					workspace: workspace,
-					selectedTab: $selectedTab
+					selectedTab: Binding(
+						get: { selectedTab },
+						set: { newTab in
+							if let tab = newTab {
+								selectTab(tab)
+							} else {
+								selectedTab = nil
+							}
+						}
+					)
 				)
 				
 				// Bookmark folders section
 				BookmarkFoldersSection(
 					workspace: workspace,
-					selectedTab: $selectedTab
+					selectedTab: Binding(
+						get: { selectedTab },
+						set: { newTab in
+							if let tab = newTab {
+								selectTab(tab)
+							} else {
+								selectedTab = nil
+							}
+						}
+					)
 				)
 				
 				// Workspace tabs section
 				WorkspaceTabsSection(
 					workspace: workspace,
-					selectedTab: $selectedTab
+					selectedTab: Binding(
+						get: { selectedTab },
+						set: { newTab in
+							if let tab = newTab {
+								selectTab(tab)
+							} else {
+								selectedTab = nil
+							}
+						}
+					),
+					onCreateTab: { newTab in
+						selectTab(newTab)
+					}
 				)
 			}
 			
@@ -60,6 +113,23 @@ struct SidebarView: View {
 		}
 		.sheet(isPresented: $showingNewWorkspaceSheet) {
 			NewWorkspaceSheet()
+		}
+		// Handle workspace changes
+		.onChange(of: selectedWorkspace) { oldValue, newValue in
+			// If workspace changed and current tab isn't in new workspace, clear selection
+			if let currentTab = selectedTab,
+			   currentTab.workspace !== newValue {
+				selectedTab = nil
+			}
+		}
+		// Handle profile changes
+		.onChange(of: selectedProfile) { oldValue, newValue in
+			// If profile changed and current workspace isn't in new profile, clear selection
+			if let currentWorkspace = selectedWorkspace,
+			   currentWorkspace.profile !== newValue {
+				selectedWorkspace = newValue?.workspaces.first
+				selectedTab = nil
+			}
 		}
 	}
 }
