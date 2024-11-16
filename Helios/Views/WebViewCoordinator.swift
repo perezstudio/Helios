@@ -7,283 +7,118 @@
 
 import SwiftUI
 import SwiftData
-import WebKit
+@preconcurrency import WebKit
 
 class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 	var tabID: UUID
 	let modelContext: ModelContext
 	private let coordinatorID = UUID()
-	
 	private weak var currentWebView: WKWebView?
-	private var isActive = true
-	private var currentNavigation: WKNavigation?
-	
-	private var canGoBackObservation: NSKeyValueObservation?
-	private var canGoForwardObservation: NSKeyValueObservation?
-	private var urlObservation: NSKeyValueObservation?
 	
 	init(_ parent: WebViewContainer) {
 		self.tabID = parent.tab.id
 		self.modelContext = parent.modelContext
 		super.init()
-		print("Coordinator initialized: \(coordinatorID) for tab: \(tabID)")
 	}
 	
-	func getTab() -> Tab? {
-		if Thread.isMainThread {
-			return fetchTab()
-		}
-		var result: Tab?
-		DispatchQueue.main.sync {
-			result = fetchTab()
-		}
-		return result
-	}
-	
-	private func fetchTab() -> Tab? {
-		assert(Thread.isMainThread)
-		let targetID = self.tabID
-		let descriptor = FetchDescriptor<Tab>(
-			predicate: #Predicate<Tab> { $0.id == targetID }
-		)
-		return try? modelContext.fetch(descriptor).first
-	}
-	
-	private func isMyWebView(_ webView: WKWebView) -> Bool {
-		guard isActive,
-			  webView === currentWebView,
-			  webView.associatedCoordinatorID == coordinatorID else {
-			if !isActive {
-				print("[\(coordinatorID)] Coordinator is not active for tab: \(tabID)")
-			}
-			if webView !== currentWebView {
-				print("[\(coordinatorID)] WebView reference mismatch for tab: \(tabID)")
-			}
-			if webView.associatedCoordinatorID != coordinatorID {
-				print("[\(coordinatorID)] Coordinator ID mismatch for tab: \(tabID)")
-			}
-			return false
-		}
-		return true
-	}
-	
-	private func clearObservations() {
-		canGoBackObservation?.invalidate()
-		canGoForwardObservation?.invalidate()
-		urlObservation?.invalidate()
-		
-		canGoBackObservation = nil
-		canGoForwardObservation = nil
-		urlObservation = nil
-	}
-	
-	private func observeNavigationState(_ webView: WKWebView) {
-		print("[\(coordinatorID)] Setting up navigation state observations for tab: \(tabID)")
-		
-		canGoBackObservation = webView.observe(\.canGoBack) { [weak self] webView, _ in
-			guard let self = self,
-				  self.isMyWebView(webView) else {
-				return
-			}
-			
-			DispatchQueue.main.async {
-				guard webView.associatedCoordinatorID == self.coordinatorID else { return }
-				print("[\(self.coordinatorID)] Updating canGoBack state for tab: \(self.tabID)")
-				NotificationCenter.default.post(
-					name: .webViewCanGoBackChanged,
-					object: (self.tabID, webView.canGoBack)
-				)
-			}
-		}
-		
-		canGoForwardObservation = webView.observe(\.canGoForward) { [weak self] webView, _ in
-			guard let self = self,
-				  self.isMyWebView(webView) else {
-				return
-			}
-			
-			DispatchQueue.main.async {
-				guard webView.associatedCoordinatorID == self.coordinatorID else { return }
-				print("[\(self.coordinatorID)] Updating canGoForward state for tab: \(self.tabID)")
-				NotificationCenter.default.post(
-					name: .webViewCanGoForwardChanged,
-					object: (self.tabID, webView.canGoForward)
-				)
-			}
-		}
-		
-		urlObservation = webView.observe(\.url) { [weak self] webView, _ in
-			guard let self = self,
-				  self.isMyWebView(webView),
-				  let url = webView.url else {
-				return
-			}
-			
-			DispatchQueue.main.async {
-				guard webView.associatedCoordinatorID == self.coordinatorID,
-					  let tab = self.getTab() else { return }
-				print("[\(self.coordinatorID)] Updating URL state for tab: \(self.tabID) to: \(url)")
+	// Handle link clicks uniformly
+	func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+		if navigationAction.navigationType == .linkActivated {
+			if let url = navigationAction.request.url,
+			   let tab = getTab() {
+				// Get proper destination workspace
+				let destinationWorkspace: Workspace
+				if tab.isPinned {
+					// For pinned tabs, use the current workspace
+					if let workspace = tab.workspace?.profile?.workspaces.first {
+						destinationWorkspace = workspace
+					} else {
+						decisionHandler(.allow)
+						return
+					}
+				} else {
+					// For regular tabs, use their workspace
+					if let workspace = tab.workspace {
+						destinationWorkspace = workspace
+					} else {
+						decisionHandler(.allow)
+						return
+					}
+				}
 				
-				tab.url = url
+				// Create new tab in appropriate workspace
+				let newTab = Tab(title: url.host ?? "New Tab", url: url)
+				destinationWorkspace.tabs.append(newTab)
+				try? modelContext.save()
+				
+				// Notify about new tab
 				NotificationCenter.default.post(
-					name: .webViewURLChanged,
-					object: WebViewURLChange(tab: tab, url: url)
+					name: .newTabCreated,
+					object: newTab
 				)
-				try? self.modelContext.save()
-			}
-		}
-	}
-	
-	func setCurrentWebView(_ webView: WKWebView) {
-		assert(Thread.isMainThread, "setCurrentWebView must be called on main thread")
-		
-		// Only clear if the new WebView is different
-		if webView !== currentWebView {
-			clearWebView()
-		}
-		
-		print("[\(coordinatorID)] Setting WebView for tab: \(tabID)")
-		
-		// Store coordinator ID using associated object
-		webView.associatedCoordinatorID = coordinatorID
-		currentWebView = webView
-		isActive = true
-		
-		observeNavigationState(webView)
-	}
-	
-	func clearWebView() {
-		assert(Thread.isMainThread, "clearWebView must be called on main thread")
-		
-		print("[\(coordinatorID)] Clearing WebView for tab: \(tabID)")
-		clearObservations()
-		
-		if let webView = currentWebView {
-			// Only clear if it matches our coordinator ID
-			if webView.associatedCoordinatorID == coordinatorID {
-				webView.associatedCoordinatorID = nil
-			}
-		}
-		
-		currentWebView = nil
-		isActive = false
-		currentNavigation = nil
-	}
-	
-	func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-		guard isMyWebView(webView) else {
-			print("[\(coordinatorID)] Ignoring provisional navigation for non-matching WebView. Tab: \(tabID)")
-			return
-		}
-		
-		currentNavigation = navigation
-		
-		DispatchQueue.main.async { [weak self] in
-			guard let self = self,
-				  let tab = self.getTab() else { return }
-			
-			print("[\(self.coordinatorID)] Started loading for tab: \(self.tabID)")
-			NotificationCenter.default.post(
-				name: .webViewStartedLoading,
-				object: tab
-			)
-		}
-	}
-	
-	func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-		guard isMyWebView(webView),
-			  navigation === currentNavigation else {
-			print("[\(coordinatorID)] Ignoring finished navigation for non-matching WebView/Navigation. Tab: \(tabID)")
-			return
-		}
-		
-		DispatchQueue.main.async { [weak self] in
-			guard let self = self,
-				  let tab = self.getTab() else { return }
-			
-			print("[\(self.coordinatorID)] Finished loading for tab: \(self.tabID)")
-			
-			guard webView.associatedCoordinatorID == self.coordinatorID else {
-				print("[\(self.coordinatorID)] WebView now belongs to different coordinator")
+				
+				decisionHandler(.cancel)
 				return
 			}
-			
-			NotificationCenter.default.post(
-				name: .webViewFinishedLoading,
-				object: tab
-			)
-			
-			if let url = webView.url {
-				tab.url = url
-				NotificationCenter.default.post(
-					name: .webViewURLChanged,
-					object: WebViewURLChange(tab: tab, url: url)
-				)
-			}
-			
-			self.currentNavigation = nil
-			self.updateTitleAndFavicon(webView: webView, tab: tab)
 		}
+		decisionHandler(.allow)
 	}
 	
-	private func updateTitleAndFavicon(webView: WKWebView, tab: Tab) {
-		guard isMyWebView(webView), tab.id == self.tabID else {
-			print("[\(coordinatorID)] Attempting to update title and favicon for non-matching WebView or Tab. Tab: \(tabID)")
-			return
-		}
-		
-		webView.evaluateJavaScript("document.title") { [weak self] (result, error) in
-			guard let self = self,
-				  self.isMyWebView(webView),
-				  let title = result as? String else { return }
-			
-			DispatchQueue.main.async {
-				guard webView.associatedCoordinatorID == self.coordinatorID,
-					  let currentTab = self.getTab(),
-					  currentTab.id == self.tabID else { return }
-				print("[\(self.coordinatorID)] Updating title for tab: \(self.tabID) to: \(title)")
-				currentTab.title = title
-				try? self.modelContext.save()
-			}
-		}
-		
+	// Handle page title updates for favicon
+	func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+		updateFavicon(webView)
+		updateTitle(webView)
+	}
+	
+	private func updateFavicon(_ webView: WKWebView) {
 		webView.evaluateJavaScript("""
-   var link = document.querySelector("link[rel~='icon']");
-   if (!link) {
-  link = document.querySelector("link[rel~='shortcut icon']");
-   }
-   link ? link.href : null;
-  """) { [weak self] (result, error) in
+			var link = document.querySelector("link[rel~='icon']");
+			if (!link) {
+				link = document.querySelector("link[rel~='shortcut icon']");
+			}
+			link ? link.href : null;
+		""") { [weak self] (result, error) in
 			guard let self = self,
-				  self.isMyWebView(webView),
 				  let iconURLString = result as? String,
 				  let iconURL = URL(string: iconURLString) else { return }
 			
-			print("[\(self.coordinatorID)] Found favicon for tab: \(self.tabID) at URL: \(iconURL)")
-			self.downloadFavicon(from: iconURL, webView: webView, tab: tab)
+			URLSession.shared.dataTask(with: iconURL) { [weak self] data, response, error in
+				guard let self = self,
+					  let data = data,
+					  let tab = self.getTab() else { return }
+				
+				DispatchQueue.main.async {
+					tab.favicon = data
+					try? self.modelContext.save()
+				}
+			}.resume()
 		}
 	}
 	
-	private func downloadFavicon(from url: URL, webView: WKWebView, tab: Tab) {
-		URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+	private func updateTitle(_ webView: WKWebView) {
+		webView.evaluateJavaScript("document.title") { [weak self] (result, error) in
 			guard let self = self,
-				  let data = data else { return }
+				  let title = result as? String,
+				  let tab = self.getTab() else { return }
 			
 			DispatchQueue.main.async {
-				guard self.isMyWebView(webView),
-					  webView.associatedCoordinatorID == self.coordinatorID,
-					  let currentTab = self.getTab(),
-					  currentTab.id == self.tabID else { return }
-				
-				print("[\(self.coordinatorID)] Updating favicon for tab: \(self.tabID)")
-				currentTab.favicon = data
+				tab.title = title
 				try? self.modelContext.save()
 			}
-		}.resume()
+		}
 	}
 	
-	deinit {
-		print("[\(coordinatorID)] Coordinator deinit for tab: \(tabID)")
-		clearWebView()
+	private func getTab() -> Tab? {
+		let descriptor = FetchDescriptor<Tab>(
+			predicate: #Predicate<Tab> { tab in
+				tab.id == tabID
+			}
+		)
+		return try? modelContext.fetch(descriptor).first
 	}
+}
+
+// Add new notification for tab creation
+extension Notification.Name {
+	static let newTabCreated = Notification.Name("newTabCreated")
 }

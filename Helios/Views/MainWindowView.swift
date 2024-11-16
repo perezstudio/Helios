@@ -24,42 +24,55 @@ struct MainWindowView: View {
 				selectedWorkspace: $selectedWorkspace,
 				selectedTab: $selectedTab
 			)
-			.navigationTitle(selectedWorkspace?.name ?? "Browser")
-			.toolbar {
-				ToolbarItem(placement: .automatic) {
-					NavigationControls(selectedTab: $selectedTab)
-				}
-			}
 		} detail: {
-			ZStack {
-				if let tab = selectedTab {
-					WebViewContainer(tab: tab, modelContext: modelContext)
-				} else {
-					EmptyStateView(
-						workspace: selectedWorkspace,
-						onCreateTab: { showingNewTabSheet = true }
-					)
-				}
-			}
-			.sheet(isPresented: $showingNewTabSheet) {
-				if let workspace = selectedWorkspace {
-					NewTabSheet(workspace: workspace) { newTab in
-						selectedTab = newTab
+			if let workspace = selectedWorkspace {
+				TabView(
+					workspace: workspace,
+					selectedTab: $selectedTab
+				)
+				.navigationTitle(workspace.name)
+				.toolbar {
+					ToolbarItemGroup(placement: .automatic) {
+						NavigationControls(selectedTab: $selectedTab)
 					}
+				}
+			} else {
+				EmptyStateView(
+					workspace: nil,
+					onCreateTab: {}
+				)
+				.navigationTitle("Browser")
+			}
+		}
+		.sheet(isPresented: $showingNewTabSheet) {
+			if let workspace = selectedWorkspace {
+				NewTabSheet(workspace: workspace) { newTab in
+					selectTab(newTab)
 				}
 			}
 		}
 		.sheet(isPresented: $showingNewProfileSheet) {
 			NewProfileSheet()
 				.onDisappear {
-					// Select the newly created profile if no profile is selected
 					if selectedProfile == nil, let lastProfile = profiles.last {
-						selectedProfile = lastProfile
-						if let firstWorkspace = lastProfile.workspaces.first {
-							selectedWorkspace = firstWorkspace
-						}
+						selectProfile(lastProfile)
 					}
 				}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .newTabCreated)) { notification in
+			if let newTab = notification.object as? Tab {
+				selectTab(newTab)
+			}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .selectBookmarkedTab)) { notification in
+			if let tab = notification.object as? Tab {
+				selectTab(tab)
+			}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .selectPinnedTab)) { notification in
+			if let tab = notification.object as? Tab {
+				selectTab(tab)
+			}
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .openNewTab)) { _ in
 			if selectedWorkspace != nil {
@@ -68,6 +81,29 @@ struct MainWindowView: View {
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .openNewProfile)) { _ in
 			showingNewProfileSheet = true
+		}
+	}
+	
+	private func selectTab(_ tab: Tab) {
+		if let workspace = tab.workspace {
+			selectedWorkspace = workspace
+			selectedProfile = workspace.profile
+		}
+		selectedTab = tab
+		tab.lastVisited = Date()
+		try? modelContext.save()
+	}
+	
+	private func selectProfile(_ profile: Profile) {
+		selectedProfile = profile
+		selectedWorkspace = profile.workspaces.first
+		if let workspace = selectedWorkspace {
+			if let activeId = workspace.activeTabId,
+			   let activeTab = workspace.tabs.first(where: { $0.id == activeId }) {
+				selectedTab = activeTab
+			} else {
+				selectedTab = workspace.tabs.first
+			}
 		}
 	}
 }

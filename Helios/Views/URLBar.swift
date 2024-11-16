@@ -19,7 +19,6 @@ struct URLBar: View {
 	@State private var urlError: String?
 	
 	private func updateURLText(from url: URL) {
-		// Show the complete URL path
 		urlText = url.absoluteString
 	}
 	
@@ -41,15 +40,9 @@ struct URLBar: View {
 					.onChange(of: isFocused) { _, newValue in
 						isEditing = newValue
 						if !newValue {
-							// Reset to current URL if unfocused without submitting
 							urlText = selectedTab?.url.absoluteString ?? ""
 						}
 					}
-				
-				// Progress Indicator and Refresh Button
-				if let tab = selectedTab {
-					LoadingButton(tab: tab)
-				}
 			}
 			
 			// Error message
@@ -63,13 +56,11 @@ struct URLBar: View {
 		.padding(.horizontal)
 		.padding(.vertical, 8)
 		.onChange(of: selectedTab) { _, newTab in
-			// Update URL text when selected tab changes
 			if let url = newTab?.url {
 				updateURLText(from: url)
 			}
 		}
 		.onAppear {
-			// Initialize URL text
 			if let url = selectedTab?.url {
 				updateURLText(from: url)
 			}
@@ -77,43 +68,35 @@ struct URLBar: View {
 		.onReceive(NotificationCenter.default.publisher(for: .webViewURLChanged)) { notification in
 			if let urlChange = notification.object as? WebViewURLChange,
 			   urlChange.tab.id == selectedTab?.id,
-			   !isFocused {  // Only update if not being edited
+			   !isFocused {
 				updateURLText(from: urlChange.url)
 			}
 		}
 	}
 	
 	private func validateAndSubmitURL() {
-		// Clear previous error
 		urlError = nil
-		
-		// Basic URL validation
 		var urlString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
 		
-		// Check if URL is empty
 		guard !urlString.isEmpty else {
 			urlError = "Please enter a URL"
 			return
 		}
 		
-		// Add https:// if no scheme is specified
 		if !urlString.contains("://") {
 			urlString = "https://" + urlString
 		}
 		
-		// Validate URL format
 		guard let url = URL(string: urlString) else {
 			urlError = "Invalid URL format"
 			return
 		}
 		
-		// Check for valid scheme
 		guard url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https" else {
 			urlError = "Only HTTP and HTTPS URLs are supported"
 			return
 		}
 		
-		// Check for valid host
 		guard let host = url.host, !host.isEmpty else {
 			urlError = "Invalid domain"
 			return
@@ -125,10 +108,20 @@ struct URLBar: View {
 			tab.lastVisited = Date()
 			try? modelContext.save()
 			
-			// Unfocus the text field
-			isFocused = false
+			// Notify WebView to load new URL
+			NotificationCenter.default.post(
+				name: .loadURL,
+				object: LoadURLRequest(tab: tab, url: url)
+			)
 		}
+		
+		isFocused = false
 	}
+}
+
+struct LoadURLRequest {
+	let tab: Tab
+	let url: URL
 }
 
 
@@ -156,6 +149,9 @@ extension Notification.Name {
 	static let webViewCanGoBackChanged = Notification.Name("webViewCanGoBackChanged")
 	static let webViewCanGoForwardChanged = Notification.Name("webViewCanGoForwardChanged")
 	static let webViewURLChanged = Notification.Name("webViewURLChanged")
+	static let selectBookmarkedTab = Notification.Name("selectBookmarkedTab")
+	static let selectPinnedTab = Notification.Name("selectPinnedTab")
+	static let loadURL = Notification.Name("loadURL")
 }
 
 struct WebViewURLChange {

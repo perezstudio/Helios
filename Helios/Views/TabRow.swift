@@ -17,7 +17,7 @@ struct TabRow: View {
 	@Environment(\.modelContext) private var modelContext
 	
 	private func closeTab() {
-		// Just remove the WebView from store - it will handle cleanup
+		// Clean up the WebView
 		WebViewStore.shared.remove(for: tab.id)
 		
 		// Close the tab
@@ -29,8 +29,21 @@ struct TabRow: View {
 	}
 	
 	private func bookmarkTab(in folder: BookmarkFolder) {
+		// Create the bookmark
 		tab.createBookmark(in: folder)
+		
+		// Clean up the original tab
+		WebViewStore.shared.remove(for: tab.id)
+		tab.workspace?.removeTab(tab)
+		
+		// Save changes
 		try? modelContext.save()
+		
+		// Switch to the bookmarked version
+		NotificationCenter.default.post(
+			name: .selectBookmarkedTab,
+			object: tab
+		)
 	}
 	
 	private func pinTab() {
@@ -38,16 +51,23 @@ struct TabRow: View {
 		   let profile = workspace.profile {
 			// Remove from workspace tabs
 			workspace.removeTab(tab)
+			
 			// Add to pinned tabs
 			profile.pinnedTabs.append(tab)
+			
 			try? modelContext.save()
+			
+			// Switch to the pinned version
+			NotificationCenter.default.post(
+				name: .selectPinnedTab,
+				object: tab
+			)
 		}
 	}
 	
 	var body: some View {
 		Button(action: onSelect) {
 			HStack(spacing: 12) {
-				// Favicon
 				Group {
 					if let favicon = tab.favicon,
 					   let image = NSImage(data: favicon) {
@@ -60,14 +80,12 @@ struct TabRow: View {
 					}
 				}
 				
-				// Title
 				Text(tab.title)
 					.lineLimit(1)
 					.truncationMode(.middle)
 				
 				Spacer()
 				
-				// Close Button
 				if isSelected {
 					Button(action: closeTab) {
 						Image(systemName: "xmark")

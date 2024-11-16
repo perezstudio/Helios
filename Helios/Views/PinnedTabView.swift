@@ -18,6 +18,14 @@ struct PinnedTabView: View {
 	
 	private func unpin() {
 		if let profile = workspace.profile {
+			// Store current state
+			let currentURL = tab.url
+			let currentTitle = tab.title
+			let currentFavicon = tab.favicon
+			
+			// Clean up old WebView
+			WebViewStore.shared.remove(for: tab.id)
+			
 			// Remove from pinned tabs
 			profile.pinnedTabs.removeAll { $0.id == tab.id }
 			
@@ -25,21 +33,18 @@ struct PinnedTabView: View {
 			workspace.tabs.append(tab)
 			tab.workspace = workspace
 			
+			// Restore state
+			tab.url = currentURL
+			tab.title = currentTitle
+			tab.favicon = currentFavicon
+			
 			try? modelContext.save()
+			
+			// Create new WebView for the unpinned tab
+			DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+				NotificationCenter.default.post(name: .selectUnpinnedTab, object: tab)
+			}
 		}
-	}
-	
-	private func closeTab() {
-		// Clean up the WebView
-		WebViewStore.shared.remove(for: tab.id)
-		
-		// Remove from pinned tabs
-		if let profile = workspace.profile {
-			profile.pinnedTabs.removeAll { $0.id == tab.id }
-			try? modelContext.save()
-		}
-		
-		onClose()
 	}
 	
 	var body: some View {
@@ -70,8 +75,12 @@ struct PinnedTabView: View {
 			Divider()
 			
 			Button("Close Tab", role: .destructive) {
-				closeTab()
+				onClose()
 			}
 		}
 	}
+}
+
+extension Notification.Name {
+	static let selectUnpinnedTab = Notification.Name("selectUnpinnedTab")
 }

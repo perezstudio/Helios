@@ -12,22 +12,22 @@ import WebKit
 class WebContainerView: NSView {
 	weak var webView: WKWebView? {
 		willSet {
-			// Only remove if it's being replaced with a different WebView
-			if newValue !== webView {
+			// Remove old WebView
+			if let oldWebView = webView, oldWebView !== newValue {
 				print("Removing old WebView")
-				webView?.removeFromSuperview()
+				oldWebView.removeFromSuperview()
 			}
 		}
 		didSet {
-			// Only add if it's a new WebView
-			if let webView = webView, webView.superview !== self {
+			// Add new WebView
+			if let newWebView = webView, newWebView.superview !== self {
 				print("Adding new WebView to container")
-				addSubview(webView)
-				webView.frame = bounds
-				webView.autoresizingMask = [.width, .height]
+				addSubview(newWebView)
+				newWebView.frame = bounds
+				newWebView.autoresizingMask = [.width, .height]
 				
 				// Force layout update
-				layout()
+				needsLayout = true
 			}
 		}
 	}
@@ -43,5 +43,10 @@ class WebContainerView: NSView {
 			print("Container frame updated to: \(frame)")
 			webView?.frame = bounds
 		}
+	}
+	
+	deinit {
+		print("WebContainerView deinit")
+		webView?.removeFromSuperview()
 	}
 }

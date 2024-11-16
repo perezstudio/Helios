@@ -67,5 +67,11 @@ struct BookmarkFoldersSection: View {
 				isPresented: $showingNewFolderSheet
 			)
 		}
+		// Handle selection of bookmarked tabs
+		.onReceive(NotificationCenter.default.publisher(for: .selectBookmarkedTab)) { notification in
+			if let tab = notification.object as? Tab {
+				selectedTab = tab
+			}
+		}
 	}
 }

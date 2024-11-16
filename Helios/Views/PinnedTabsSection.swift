@@ -26,13 +26,16 @@ struct PinnedTabsSection: View {
 						tab: tab,
 						workspace: workspace,
 						isSelected: selectedTab?.id == tab.id,
-						onSelect: {
-							selectedTab = tab
-						},
+						onSelect: { selectTab(tab) },
 						onClose: {
 							if selectedTab?.id == tab.id {
 								selectedTab = nil
 							}
+							
+							// Clean up WebView
+							WebViewStore.shared.remove(for: tab.id)
+							profile.pinnedTabs.removeAll(where: { $0.id == tab.id })
+							try? modelContext.save()
 						}
 					)
 				}
@@ -40,4 +43,21 @@ struct PinnedTabsSection: View {
 			.padding(8)
 		}
 	}
+	
+	private func selectTab(_ tab: Tab) {
+		selectedTab = tab
+		tab.lastVisited = Date()
+		WebViewStore.shared.setActiveTab(tab.id)
+		try? modelContext.save()
+		
+		// Post notification for tab selection
+		NotificationCenter.default.post(
+			name: .pinnedTabSelected,
+			object: tab
+		)
+	}
+}
+
+extension Notification.Name {
+	static let pinnedTabSelected = Notification.Name("pinnedTabSelected")
 }

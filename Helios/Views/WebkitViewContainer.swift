@@ -12,111 +12,76 @@ import WebKit
 struct WebViewContainer: NSViewRepresentable {
 	let tab: Tab
 	let modelContext: ModelContext
+	@Binding var isVisible: Bool
 	
-	private func createWebView(coordinator: WebViewCoordinator) -> WKWebView {
-		print("Creating WebView for tab: \(tab.id)")
-		let config = WKWebViewConfiguration()
-		config.preferences.javaScriptCanOpenWindowsAutomatically = true
-		config.preferences.isElementFullscreenEnabled = true
-		
-		config.applicationNameForUserAgent = "Version/17.2.1 Safari/605.1.15"
-		
-		let webView = WKWebView(frame: .zero, configuration: config)
-		webView.allowsMagnification = true
-		webView.allowsBackForwardNavigationGestures = true
-		webView.navigationDelegate = coordinator
-		webView.uiDelegate = coordinator
-		
-		print("Loading URL: \(tab.url) for tab: \(tab.id)")
-		let request = URLRequest(url: tab.url)
-		webView.load(request)
-		
-		return webView
+	func makeCoordinator() -> WebViewCoordinator {
+		let coordinator = WebViewCoordinator(self)
+		print("Created coordinator for tab: \(tab.id)")
+		return coordinator
 	}
 	
 	func makeNSView(context: Context) -> WebContainerView {
 		print("Creating container for tab: \(tab.id)")
 		let containerView = WebContainerView()
-		containerView.frame = NSRect(x: 0, y: 0, width: 800, height: 600) // Set initial size
+		containerView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
 		
-		let coordinator = context.coordinator
-		
-		// Use the tab's ID as the key for the WebView
-		let webView = WebViewStore.shared.getOrCreateWebView(
-			for: tab.id,
-			createWebView: { createWebView(coordinator: coordinator) }
-		)
-		
+		// Create and configure WebView
+		let webView = createWebView(coordinator: context.coordinator)
 		containerView.webView = webView
-		coordinator.setCurrentWebView(webView)
-		coordinator.tabID = tab.id // Set the tabID in the coordinator
+		
+		// Load initial URL
+		let request = URLRequest(url: tab.url)
+		webView.load(request)
 		
 		return containerView
 	}
 	
 	func updateNSView(_ containerView: WebContainerView, context: Context) {
-			print("Updating container for tab: \(tab.id)")
-			
-			let coordinator = context.coordinator
-			
-			// Ensure we're using the correct WebView for this tab
-			let webView = WebViewStore.shared.getOrCreateWebView(
-				for: tab.id,
-				createWebView: { createWebView(coordinator: coordinator) }
-			)
-			
-			// Only update the WebView if it's different from the current one
-			if containerView.webView !== webView {
-				containerView.webView = webView
-				coordinator.setCurrentWebView(webView)
-				coordinator.tabID = tab.id // Update the tabID in the coordinator
-			}
-			
-			// Ensure proper frame setup
-			webView.frame = containerView.bounds
-			webView.autoresizingMask = [.width, .height]
-			
-			// Force layout update
-			containerView.layout()
+		print("Updating container for tab: \(tab.id)")
+		
+		if containerView.webView == nil {
+			// Recreate WebView if missing
+			let webView = createWebView(coordinator: context.coordinator)
+			containerView.webView = webView
+			let request = URLRequest(url: tab.url)
+			webView.load(request)
 		}
+		
+		// Update visibility
+		containerView.isHidden = !isVisible
+		containerView.webView?.isHidden = !isVisible
+		
+		// Update frame
+		if let webView = containerView.webView {
+			webView.frame = containerView.bounds
+		}
+	}
 	
 	static func dismantleNSView(_ containerView: WebContainerView, coordinator: WebViewCoordinator) {
-		let tabID = coordinator.tabID
-		print("Dismantling container for tab: \(tabID)")
-		
-		// Get tab to check if it's pinned
-		guard let tab = coordinator.getTab() else {
-			// If we can't get the tab, clean up anyway
-			WebViewStore.shared.remove(for: tabID)
-			containerView.webView = nil
-			coordinator.clearWebView()
-			return
+		print("Dismantling container for tab: \(coordinator.tabID)")
+		if let webView = containerView.webView {
+			webView.stopLoading()
+			webView.navigationDelegate = nil
+			webView.uiDelegate = nil
+			webView.removeFromSuperview()
 		}
-		
-		if !tab.isPinned {
-			WebViewStore.shared.remove(for: tabID)
-			containerView.webView = nil
-			coordinator.clearWebView()
-		}
+		containerView.webView = nil
 	}
 	
-	func makeCoordinator() -> WebViewCoordinator {
-		let coordinator = WebViewCoordinator(self)
-		print("Created new coordinator for tab: \(tab.id)")
-		return coordinator
-	}
-}
-
-// MARK: - URL Extension for Validation
-extension URL {
-	var isValid: Bool {
-		guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-			return false
-		}
-		if let match = detector.firstMatch(in: self.absoluteString, options: [], range: NSRange(location: 0, length: self.absoluteString.utf16.count)) {
-			return match.range.length == self.absoluteString.utf16.count
-		}
-		return false
+	private func createWebView(coordinator: WebViewCoordinator) -> WKWebView {
+		print("Creating WebView for tab: \(tab.id)")
+		
+		let config = WKWebViewConfiguration()
+		config.websiteDataStore = WKWebsiteDataStore.default()
+		config.applicationNameForUserAgent = "Version/17.2.1 Safari/605.1.15"
+		
+		let webView = WKWebView(frame: .zero, configuration: config)
+		webView.navigationDelegate = coordinator
+		webView.uiDelegate = coordinator
+		webView.allowsMagnification = true
+		webView.allowsBackForwardNavigationGestures = true
+		
+		return webView
 	}
 }
 

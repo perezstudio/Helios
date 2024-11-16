@@ -53,6 +53,16 @@ final class Tab {
 		self.isSecure = url.scheme?.lowercased() == "https"
 	}
 	
+	static func createNewTab(with url: URL, in workspace: Workspace) -> Tab {
+		let tab = Tab(
+			title: url.host ?? "New Tab",
+			url: url,
+			workspace: workspace
+		)
+		workspace.tabs.append(tab)
+		return tab
+	}
+	
 	func pin() {
 		if let profile = workspace?.profile {
 			// Check if already pinned
