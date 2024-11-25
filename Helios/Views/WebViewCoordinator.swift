@@ -30,6 +30,29 @@ class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
 		self.modelContext = parent.modelContext
 		self.isVisible = parent.isVisible
 		super.init()
+		
+		// Add notification observer
+		NotificationCenter.default.addObserver(
+			self,
+			selector: #selector(handleLoadURL(_:)),
+			name: .loadURL,
+			object: nil
+		)
+	}
+	
+	// Add this method to handle URL loading
+	@objc private func handleLoadURL(_ notification: Notification) {
+		guard let loadRequest = notification.object as? LoadURLRequest,
+			  loadRequest.tab.id == tabID,
+			  let webView = currentWebView,
+			  isMyWebView(webView) else {
+			return
+		}
+		
+		isLoading = true
+		lastLoadedURL = loadRequest.url
+		let request = URLRequest(url: loadRequest.url)
+		webView.load(request)
 	}
 	
 	// MARK: - Public Methods

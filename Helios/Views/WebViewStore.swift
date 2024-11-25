@@ -109,4 +109,12 @@ class WebViewStore {
 			return storeQueue.sync(execute: block)
 		}
 	}
+	
+	func loadURL(_ url: URL, for tabID: UUID) {
+		if let webView = getCurrentWebView(for: tabID) {
+			let request = URLRequest(url: url)
+			webView.load(request)
+		}
+	}
+	
 }

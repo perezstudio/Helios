@@ -17,6 +17,7 @@ struct URLBar: View {
 	@State private var isEditing = false
 	@FocusState private var isFocused: Bool
 	@State private var urlError: String?
+	@AppStorage("defaultSearchEngine") private var defaultSearchEngine = "Google"
 	
 	private func updateURLText(from url: URL) {
 		if !isFocused {
@@ -33,7 +34,7 @@ struct URLBar: View {
 				}
 				
 				// URL TextField
-				TextField("Enter URL", text: $urlText)
+				TextField("Enter URL or search", text: $urlText)
 					.textFieldStyle(URLTextFieldStyle(isEditing: isEditing))
 					.focused($isFocused)
 					.onSubmit {
@@ -45,6 +46,11 @@ struct URLBar: View {
 							updateURLText(from: selectedTab?.url ?? URL(string: "about:blank")!)
 						}
 					}
+				
+				// Progress Indicator and Refresh Button
+				if let tab = selectedTab {
+					LoadingButton(tab: tab)
+				}
 			}
 			
 			// Error message
@@ -77,44 +83,83 @@ struct URLBar: View {
 	
 	private func validateAndSubmitURL() {
 		urlError = nil
-		var urlString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+		let trimmedText = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
 		
-		guard !urlString.isEmpty else {
-			urlError = "Please enter a URL"
+		guard !trimmedText.isEmpty else {
+			urlError = "Please enter a URL or search term"
 			return
 		}
 		
-		if !urlString.contains("://") {
-			urlString = "https://" + urlString
-		}
-		
-		guard let url = URL(string: urlString) else {
-			urlError = "Invalid URL format"
+		// If it's a valid URL, use it directly
+		if let url = validateURL(trimmedText) {
+			navigateToURL(url)
 			return
 		}
 		
-		guard url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https" else {
-			urlError = "Only HTTP and HTTPS URLs are supported"
-			return
+		// If not a URL, use search
+		let searchURL = createSearchURL(for: trimmedText)
+		navigateToURL(searchURL)
+	}
+	
+	private func validateURL(_ input: String) -> URL? {
+		// If the input already starts with a scheme, use it as is
+		if input.starts(with: "http://") || input.starts(with: "https://") {
+			if let url = URL(string: input),
+			   let host = url.host,
+			   !host.isEmpty {
+				return url
+			}
+			return nil
 		}
 		
-		guard let host = url.host, !host.isEmpty else {
-			urlError = "Invalid domain"
-			return
+		// Try with https:// prefix first
+		if let httpsURL = URL(string: "https://" + input),
+		   let host = httpsURL.host,
+		   host.contains(".") { // Basic check for domain-like structure
+			return httpsURL
 		}
 		
-		// Update the tab's URL
-		if let tab = selectedTab {
-			tab.url = url
-			tab.lastVisited = Date()
-			try? modelContext.save()
-			
-			// Notify WebView to load new URL
-			NotificationCenter.default.post(
-				name: .loadURL,
-				object: LoadURLRequest(tab: tab, url: url)
-			)
+		// If https:// fails, try http://
+		if let httpURL = URL(string: "http://" + input),
+		   let host = httpURL.host,
+		   host.contains(".") { // Basic check for domain-like structure
+			return httpURL
 		}
+		
+		return nil
+	}
+	
+	private func createSearchURL(for searchTerm: String) -> URL {
+		let encodedSearch = searchTerm.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchTerm
+		
+		switch defaultSearchEngine {
+		case "DuckDuckGo":
+			return URL(string: "https://duckduckgo.com/?q=\(encodedSearch)")!
+		case "Bing":
+			return URL(string: "https://www.bing.com/search?q=\(encodedSearch)")!
+		case "Google":
+			fallthrough
+		default:
+			return URL(string: "https://www.google.com/search?q=\(encodedSearch)")!
+		}
+	}
+	
+	private func navigateToURL(_ url: URL) {
+		guard let tab = selectedTab else { return }
+		
+		// Update tab's URL
+		tab.url = url
+		tab.lastVisited = Date()
+		try? modelContext.save()
+		
+		// Trigger WebView load
+		WebViewStore.shared.loadURL(url, for: tab.id)
+		
+		// Also post notification for other observers
+		NotificationCenter.default.post(
+			name: .loadURL,
+			object: LoadURLRequest(tab: tab, url: url)
+		)
 		
 		isFocused = false
 	}
