@@ -60,17 +60,55 @@ extension Workspace {
 		}
 	}
 	
-	func moveTab(_ tab: Tab, to index: Int) {
-		if let currentIndex = tabs.firstIndex(where: { $0.id == tab.id }) {
-			let tab = tabs.remove(at: currentIndex)
-			tabs.insert(tab, at: min(index, tabs.count))
+	var orderedTabs: [Tab] {
+		tabs.sorted { $0.order < $1.order }
+	}
+	
+	func moveTab(_ tab: Tab, to newIndex: Int) {
+		// Get current ordered tabs
+		let currentTabs = orderedTabs
+		let oldIndex = currentTabs.firstIndex(of: tab) ?? 0
+		
+		// Only proceed if the indices are different
+		guard oldIndex != newIndex else { return }
+		
+		// If moving forward, decrement orders of tabs in between
+		if newIndex > oldIndex {
+			for i in (oldIndex + 1)...newIndex {
+				currentTabs[i].order -= 1
+			}
 		}
+		// If moving backward, increment orders of tabs in between
+		else {
+			for i in newIndex..<oldIndex {
+				currentTabs[i].order += 1
+			}
+		}
+		
+		// Set new order for moved tab
+		tab.order = newIndex
+		
+		try? context?.save()
+	}
+	
+	func reorderTabs() {
+		// Reset all tab orders to match current array order
+		for (index, tab) in orderedTabs.enumerated() {
+			tab.order = index
+		}
+		try? context?.save()
 	}
 	
 	func openLinkInNewTab(_ url: URL) {
 		let newTab = Tab.createNewTab(with: url, in: self)
 		self.activeTabId = newTab.id
 		try? context?.save()
+		
+		// Post notification to select the new tab
+		NotificationCenter.default.post(
+			name: .selectNewTab,
+			object: SelectTabRequest(workspace: self, tab: newTab)
+		)
 	}
 }
 

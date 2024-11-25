@@ -25,11 +25,20 @@ struct HeliosApp: App {
 	}
 	
 	var body: some Scene {
+		// Main Window
 		WindowGroup {
 			MainWindowView()
+				.toolbar {
+					ToolbarItem(placement: .primaryAction) {
+						SettingsLink {
+							SettingsView()
+						}
+					}
+				}
 		}
 		.modelContainer(container)
 		.commands {
+			// File Menu Commands
 			CommandMenu("File") {
 				Button("New Profile") {
 					NotificationCenter.default.post(name: .openNewProfile, object: nil)
@@ -42,8 +51,15 @@ struct HeliosApp: App {
 				.keyboardShortcut("t", modifiers: .command)
 			}
 		}
+
+		// Settings Scene
+		Settings {
+			SettingsView()
+		}
+		.modelContainer(container)
 	}
 }
+
 
 // Add notification names
 extension Notification.Name {

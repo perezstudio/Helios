@@ -21,7 +21,6 @@ struct WorkspaceTabsSection: View {
 			VStack(spacing: 0) {
 				// Workspace Header
 				HStack {
-					// Workspace icon and name
 					HStack(spacing: 8) {
 						Image(systemName: workspace.iconName)
 							.font(.system(size: 16))
@@ -31,7 +30,6 @@ struct WorkspaceTabsSection: View {
 					
 					Spacer()
 					
-					// Settings Menu
 					Menu {
 						Button("Change Profile") {
 							showingProfileChangeSheet = true
@@ -49,21 +47,16 @@ struct WorkspaceTabsSection: View {
 				// Tabs List
 				ScrollView {
 					LazyVStack(spacing: 2) {
-						// New Tab Button
 						NewTabRow(showingNewTabSheet: $showingNewTabSheet)
 							.padding(.bottom, 2)
 						
-						// Existing Tabs
-						ForEach(workspace.tabs) { tab in
-							TabRow(
+						ForEach(workspace.orderedTabs) { tab in
+							DraggableTabRow(
 								tab: tab,
 								isSelected: selectedTab?.id == tab.id,
-								onSelect: {
-									selectTab(tab)
-								},
-								onClose: {
-									closeTab(tab)
-								}
+								workspace: workspace,
+								onSelect: { selectTab(tab) },
+								onClose: { closeTab(tab) }
 							)
 						}
 					}
@@ -75,8 +68,12 @@ struct WorkspaceTabsSection: View {
 			ChangeProfileSheet(workspace: workspace)
 		}
 		.sheet(isPresented: $showingNewTabSheet) {
-			NewTabSheet(workspace: workspace) { newTab in
-				selectTab(newTab)
+			NewTabSheet(workspace: workspace)
+		}
+		.onChange(of: workspace.tabs) { oldValue, newValue in
+			if let currentTab = selectedTab,
+			   !newValue.contains(where: { $0.id == currentTab.id }) {
+				selectedTab = nil
 			}
 		}
 	}
@@ -91,11 +88,11 @@ struct WorkspaceTabsSection: View {
 	private func closeTab(_ tab: Tab) {
 		if selectedTab?.id == tab.id {
 			// Find the next tab to select
-			if let index = workspace.tabs.firstIndex(where: { $0.id == tab.id }) {
+			if let index = workspace.orderedTabs.firstIndex(where: { $0.id == tab.id }) {
 				if index > 0 {
-					selectedTab = workspace.tabs[index - 1]
-				} else if workspace.tabs.count > 1 {
-					selectedTab = workspace.tabs[1]
+					selectedTab = workspace.orderedTabs[index - 1]
+				} else if workspace.orderedTabs.count > 1 {
+					selectedTab = workspace.orderedTabs[1]
 				} else {
 					selectedTab = nil
 				}
@@ -108,3 +105,4 @@ struct WorkspaceTabsSection: View {
 		try? modelContext.save()
 	}
 }
+

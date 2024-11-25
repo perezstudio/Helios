@@ -12,67 +12,71 @@ struct TabView: View {
 	@Binding var selectedTab: Tab?
 	@Environment(\.modelContext) private var modelContext
 	
-	var body: some View {
-		ZStack {
-			// Empty state when no tab is selected
-			if selectedTab == nil {
-				EmptyStateView(
-					workspace: workspace,
-					onCreateTab: {
-						if let firstTab = workspace.tabs.first {
-							selectTab(firstTab)
-						}
-					}
-				)
+	private func isTabVisible(_ tab: Tab) -> Bool {
+		selectedTab?.id == tab.id
+	}
+	
+	private func visibilityBinding(for tab: Tab) -> Binding<Bool> {
+		Binding(
+			get: { isTabVisible(tab) },
+			set: { _ in selectTab(tab) }
+		)
+	}
+	
+	private var emptyStateView: some View {
+		EmptyStateView(
+			workspace: workspace,
+			onCreateTab: {
+				if let firstTab = workspace.tabs.first {
+					selectTab(firstTab)
+				}
 			}
-			
-			// WebViews for regular tabs
-			ForEach(workspace.tabs) { tab in
-				WebViewContainer(
-					tab: tab,
-					modelContext: modelContext,
-					isVisible: Binding(
-						get: { selectedTab?.id == tab.id },
-						set: { isVisible in
-							if isVisible {
-								selectTab(tab)
-							}
-						}
-					)
-				)
-				.zIndex(selectedTab?.id == tab.id ? 1 : 0)
-				.opacity(selectedTab?.id == tab.id ? 1 : 0)
-			}
-			
-			// WebViews for pinned tabs
+		)
+	}
+	
+	private var regularTabsView: some View {
+		ForEach(workspace.tabs) { tab in
+			WebViewContainer(
+				tab: tab,
+				modelContext: modelContext,
+				isVisible: visibilityBinding(for: tab)
+			)
+			.opacity(isTabVisible(tab) ? 1 : 0)
+		}
+	}
+	
+	private var pinnedTabsView: some View {
+		Group {
 			if let profile = workspace.profile {
 				ForEach(profile.pinnedTabs) { tab in
 					WebViewContainer(
 						tab: tab,
 						modelContext: modelContext,
-						isVisible: Binding(
-							get: { selectedTab?.id == tab.id },
-							set: { isVisible in
-								if isVisible {
-									selectTab(tab)
-								}
-							}
-						)
+						isVisible: visibilityBinding(for: tab)
 					)
-					.zIndex(selectedTab?.id == tab.id ? 2 : 0)  // Higher zIndex for pinned tabs
-					.opacity(selectedTab?.id == tab.id ? 1 : 0)
+					.opacity(isTabVisible(tab) ? 1 : 0)
 				}
 			}
 		}
+	}
+	
+	var body: some View {
+		ZStack {
+			if selectedTab == nil {
+				emptyStateView
+			}
+			regularTabsView
+			pinnedTabsView
+		}
 		.onChange(of: selectedTab) { oldValue, newValue in
 			if let tab = newValue {
+				workspace.activeTabId = tab.id
 				tab.lastVisited = Date()
 				WebViewStore.shared.setActiveTab(tab.id)
 				try? modelContext.save()
 			}
 		}
 		.onAppear {
-			// Set initial tab if needed
 			if selectedTab == nil {
 				if let activeId = workspace.activeTabId,
 				   let activeTab = workspace.tabs.first(where: { $0.id == activeId }) {
@@ -82,17 +86,13 @@ struct TabView: View {
 				}
 			}
 		}
-		.onReceive(NotificationCenter.default.publisher(for: .pinnedTabSelected)) { notification in
-			if let tab = notification.object as? Tab {
-				selectTab(tab)
-			}
-		}
 	}
 	
 	private func selectTab(_ tab: Tab) {
 		selectedTab = tab
-		WebViewStore.shared.setActiveTab(tab.id)
+		workspace.activeTabId = tab.id
 		tab.lastVisited = Date()
+		WebViewStore.shared.setActiveTab(tab.id)
 		try? modelContext.save()
 	}
 }

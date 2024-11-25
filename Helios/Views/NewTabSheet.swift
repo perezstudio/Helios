@@ -12,10 +12,43 @@ struct NewTabSheet: View {
 	let workspace: Workspace
 	@Environment(\.dismiss) private var dismiss
 	@Environment(\.modelContext) private var modelContext
-	@State private var urlString = ""
-	@State private var showError = false
-	@State private var errorMessage = ""
-	var onTabCreated: ((Tab) -> Void)? = nil
+	@State private var urlOrSearchText = ""
+	@FocusState private var isTextFieldFocused: Bool
+	@AppStorage("defaultSearchEngine") private var defaultSearchEngine = "Google"
+	
+	var body: some View {
+		TextField("Enter URL or search term", text: $urlOrSearchText)
+			.textFieldStyle(.roundedBorder)
+			.frame(width: 400)
+			.focused($isTextFieldFocused)
+			.onSubmit(createTab)
+			.submitLabel(.return)
+			.interactiveDismissDisabled(false)
+			.onAppear {
+				isTextFieldFocused = true
+			}
+			.padding()
+	}
+	
+	private func createTab() {
+		let trimmedText = urlOrSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !trimmedText.isEmpty else {
+			dismiss()
+			return
+		}
+		
+		// If it's a valid URL, use it directly
+		if let url = validateAndCreateURL(trimmedText) {
+			createNewTab(with: url)
+			dismiss()
+			return
+		}
+		
+		// If not a URL, create a search URL
+		let searchURL = createSearchURL(for: trimmedText)
+		createNewTab(with: searchURL)
+		dismiss()
+	}
 	
 	private func validateAndCreateURL(_ input: String) -> URL? {
 		// If the input already starts with a scheme, use it as is
@@ -24,77 +57,45 @@ struct NewTabSheet: View {
 		}
 		
 		// Try with https:// prefix first
-		if let httpsURL = URL(string: "https://" + input) {
+		if let httpsURL = URL(string: "https://" + input),
+		   let host = httpsURL.host,
+		   host.contains(".") { // Basic check for domain-like structure
 			return httpsURL
 		}
 		
 		// If https:// fails, try http://
-		if let httpURL = URL(string: "http://" + input) {
+		if let httpURL = URL(string: "http://" + input),
+		   let host = httpURL.host,
+		   host.contains(".") { // Basic check for domain-like structure
 			return httpURL
 		}
 		
 		return nil
 	}
 	
-	private func createTab() {
-		// Trim whitespace and newlines
-		let trimmedString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+	private func createSearchURL(for searchTerm: String) -> URL {
+		let encodedSearch = searchTerm.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? searchTerm
 		
-		guard !trimmedString.isEmpty else {
-			errorMessage = "Please enter a URL"
-			showError = true
-			return
+		switch defaultSearchEngine {
+		case "DuckDuckGo":
+			return URL(string: "https://duckduckgo.com/?q=\(encodedSearch)")!
+		case "Bing":
+			return URL(string: "https://www.bing.com/search?q=\(encodedSearch)")!
+		case "Google":
+			fallthrough
+		default:
+			return URL(string: "https://www.google.com/search?q=\(encodedSearch)")!
 		}
-		
-		guard let url = validateAndCreateURL(trimmedString) else {
-			errorMessage = "Invalid URL. Please enter a valid web address."
-			showError = true
-			return
-		}
-		
-		// Create a new tab with the validated URL
-		let newTab = Tab(title: url.host ?? "New Tab", url: url)
-		workspace.tabs.append(newTab)
-		newTab.workspace = workspace // Ensure workspace relationship is set
-		try? modelContext.save()
-		
-		// Call the callback with the new tab
-		onTabCreated?(newTab)
-		dismiss()
 	}
 	
-	var body: some View {
-		VStack(spacing: 16) {
-			Text("New Tab")
-				.font(.headline)
-			
-			TextField("Enter URL or search term", text: $urlString)
-				.textFieldStyle(.roundedBorder)
-				.onSubmit {
-					createTab()
-				}
-			
-			HStack {
-				Button("Cancel") {
-					dismiss()
-				}
-				.keyboardShortcut(.escape)
-				
-				Button("Create Tab") {
-					createTab()
-				}
-				.keyboardShortcut(.return)
-				.buttonStyle(.borderedProminent)
-			}
-		}
-		.frame(width: 400)
-		.padding()
-		.alert("Error", isPresented: $showError) {
-			Button("OK") {
-				showError = false
-			}
-		} message: {
-			Text(errorMessage)
-		}
+	private func createNewTab(with url: URL) {
+		let newTab = Tab.createNewTab(with: url, in: workspace)
+		try? modelContext.save()
+		
+		// Post notification to select the new tab
+		NotificationCenter.default.post(
+			name: .selectNewTab,
+			object: SelectTabRequest(workspace: workspace, tab: newTab)
+		)
 	}
 }

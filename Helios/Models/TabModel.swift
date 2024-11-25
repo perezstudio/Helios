@@ -18,6 +18,7 @@ final class Tab {
 	var favicon: Data?
 	var lastVisited: Date?
 	var isSecure: Bool
+	var order: Int
 	
 	@Relationship(inverse: \Workspace.tabs)
 	private var workspaceRelationship: Workspace?
@@ -51,16 +52,15 @@ final class Tab {
 		self.lastVisited = Date()
 		self.workspaceRelationship = workspace
 		self.isSecure = url.scheme?.lowercased() == "https"
+		self.order = workspace?.tabs.count ?? 0
 	}
 	
 	static func createNewTab(with url: URL, in workspace: Workspace) -> Tab {
-		let tab = Tab(
-			title: url.host ?? "New Tab",
-			url: url,
-			workspace: workspace
-		)
-		workspace.tabs.append(tab)
-		return tab
+		let newTab = Tab(title: url.host ?? "New Tab", url: url, workspace: workspace)
+		workspace.tabs.append(newTab)
+		newTab.order = workspace.tabs.count - 1  // Set order to end of list
+		workspace.activeTabId = newTab.id
+		return newTab
 	}
 	
 	func pin() {
@@ -114,7 +114,7 @@ final class Tab {
 }
 
 // MARK: - Tab Transfer Data
-struct TabTransferID: Transferable, Codable {
+struct TabTransferID: Transferable, Codable, Equatable {
 	let id: UUID
 	
 	static var transferRepresentation: some TransferRepresentation {
@@ -123,19 +123,19 @@ struct TabTransferID: Transferable, Codable {
 }
 
 extension UTType {
-	static var tabID: UTType {
-		UTType(exportedAs: "com.kevinperez.Helios.tab-id")
-	}
+	static var tabID = UTType(exportedAs: "com.kevinperez.Helios.tab-id")
 }
 
 // MARK: - Transferable Implementation
 extension Tab: Transferable {
 	static var transferRepresentation: some TransferRepresentation {
-		ProxyRepresentation<Tab, TabTransferID>(
-			exporting: { tab in
-				TabTransferID(id: tab.id)
-			}
-		)
+		ProxyRepresentation<Tab, Data> { tab in
+			// Encode just the ID for transfer
+			try JSONEncoder().encode(tab.id)
+		} importing: { data in
+			// We'll never actually import, just use this as placeholder
+			self.init(title: "", url: URL(string: "about:blank")!)
+		}
 	}
 }
 
@@ -165,4 +165,5 @@ extension Tab {
 		folder.bookmarks.append(self)
 	}
 }
+
 

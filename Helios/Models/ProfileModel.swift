@@ -36,14 +36,12 @@ final class Profile {
 		}
 	}
 	
-	func clearBrowsingData() {
+	func clearBrowsingData() async {
 		// Clear history
 		browsingHistory.removeAll()
 		
-		// Clear website data for this profile
-		Task {
-			await clearWebsiteData()
-		}
+		// Clear website data
+		await clearWebsiteData()
 	}
 	
 	private func clearWebsiteData() async {
@@ -51,7 +49,7 @@ final class Profile {
 						   WKWebsiteDataTypeMemoryCache,
 						   WKWebsiteDataTypeCookies])
 		
-		let dataStore = WKWebsiteDataStore.default()
+		let dataStore = await WKWebsiteDataStore.default()
 		let records = await dataStore.dataRecords(ofTypes: dataTypes)
 		
 		// Clear all website data

@@ -16,6 +16,7 @@ struct MainWindowView: View {
 	@State private var selectedTab: Tab?
 	@State private var showingNewTabSheet = false
 	@State private var showingNewProfileSheet = false
+	@State private var showingSettings = false
 	
 	var body: some View {
 		NavigationSplitView {
@@ -25,30 +26,37 @@ struct MainWindowView: View {
 				selectedTab: $selectedTab
 			)
 		} detail: {
-			if let workspace = selectedWorkspace {
-				TabView(
-					workspace: workspace,
-					selectedTab: $selectedTab
-				)
-				.navigationTitle(workspace.name)
-				.toolbar {
-					ToolbarItemGroup(placement: .automatic) {
+			Group {
+				if let workspace = selectedWorkspace {
+					TabView(
+						workspace: workspace,
+						selectedTab: $selectedTab
+					)
+				} else {
+					EmptyStateView(
+						workspace: nil,
+						onCreateTab: {}
+					)
+				}
+			}
+			.navigationTitle(selectedWorkspace?.name ?? "Browser")
+			.toolbar {
+				ToolbarItem(placement: .automatic) {
+					HStack(spacing: 12) {
 						NavigationControls(selectedTab: $selectedTab)
+						
+						Button(action: { showingSettings = true }) {
+							Image(systemName: "gear")
+								.frame(width: 24, height: 24)
+						}
+						.buttonStyle(.borderless)
 					}
 				}
-			} else {
-				EmptyStateView(
-					workspace: nil,
-					onCreateTab: {}
-				)
-				.navigationTitle("Browser")
 			}
 		}
 		.sheet(isPresented: $showingNewTabSheet) {
 			if let workspace = selectedWorkspace {
-				NewTabSheet(workspace: workspace) { newTab in
-					selectTab(newTab)
-				}
+				NewTabSheet(workspace: workspace)
 			}
 		}
 		.sheet(isPresented: $showingNewProfileSheet) {
@@ -59,19 +67,14 @@ struct MainWindowView: View {
 					}
 				}
 		}
-		.onReceive(NotificationCenter.default.publisher(for: .newTabCreated)) { notification in
-			if let newTab = notification.object as? Tab {
-				selectTab(newTab)
-			}
+		.sheet(isPresented: $showingSettings) {
+			SettingsView()
 		}
-		.onReceive(NotificationCenter.default.publisher(for: .selectBookmarkedTab)) { notification in
-			if let tab = notification.object as? Tab {
-				selectTab(tab)
-			}
-		}
-		.onReceive(NotificationCenter.default.publisher(for: .selectPinnedTab)) { notification in
-			if let tab = notification.object as? Tab {
-				selectTab(tab)
+		.onReceive(NotificationCenter.default.publisher(for: .selectNewTab)) { notification in
+			if let request = notification.object as? SelectTabRequest {
+				selectedWorkspace = request.workspace
+				selectedProfile = request.workspace.profile
+				selectedTab = request.tab
 			}
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .openNewTab)) { _ in
@@ -84,25 +87,15 @@ struct MainWindowView: View {
 		}
 	}
 	
-	private func selectTab(_ tab: Tab) {
-		if let workspace = tab.workspace {
-			selectedWorkspace = workspace
-			selectedProfile = workspace.profile
-		}
-		selectedTab = tab
-		tab.lastVisited = Date()
-		try? modelContext.save()
-	}
-	
 	private func selectProfile(_ profile: Profile) {
 		selectedProfile = profile
-		selectedWorkspace = profile.workspaces.first
-		if let workspace = selectedWorkspace {
-			if let activeId = workspace.activeTabId,
-			   let activeTab = workspace.tabs.first(where: { $0.id == activeId }) {
+		if let firstWorkspace = profile.workspaces.first {
+			selectedWorkspace = firstWorkspace
+			if let activeId = firstWorkspace.activeTabId,
+			   let activeTab = firstWorkspace.tabs.first(where: { $0.id == activeId }) {
 				selectedTab = activeTab
-			} else {
-				selectedTab = workspace.tabs.first
+			} else if let firstTab = firstWorkspace.tabs.first {
+				selectedTab = firstTab
 			}
 		}
 	}

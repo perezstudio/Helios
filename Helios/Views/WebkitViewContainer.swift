@@ -14,10 +14,51 @@ struct WebViewContainer: NSViewRepresentable {
 	let modelContext: ModelContext
 	@Binding var isVisible: Bool
 	
-	func makeCoordinator() -> WebViewCoordinator {
-		let coordinator = WebViewCoordinator(self)
-		print("Created coordinator for tab: \(tab.id)")
-		return coordinator
+	// Add UserDefaults observation for privacy settings
+	@AppStorage("blockTrackers") private var blockTrackers = true
+	@AppStorage("preventCrossSiteTracking") private var preventCrossSiteTracking = true
+	@AppStorage("hideIpAddress") private var hideIpAddress = false
+	@AppStorage("customUserAgent") private var customUserAgent = ""
+	
+	private func createWebView(coordinator: WebViewCoordinator) -> WKWebView {
+		print("Creating WebView for tab: \(tab.id)")
+		
+		// Create WKWebViewConfiguration with privacy settings
+		let config = WKWebViewConfiguration()
+		
+		// Set up Website Privacy preferences
+		if blockTrackers {
+			config.websiteDataStore = .nonPersistent()
+		}
+		
+		// Configure content blockers if needed
+		if preventCrossSiteTracking {
+			config.defaultWebpagePreferences.allowsContentJavaScript = false
+		}
+		
+		// Configure custom User Agent
+		// Use Safari's default user agent string
+		config.applicationNameForUserAgent = "Version/17.2.1 Safari/605.1.15"
+		
+		// Basic configuration
+		config.preferences.javaScriptCanOpenWindowsAutomatically = true
+		config.preferences.isElementFullscreenEnabled = true
+		
+		let webView = WKWebView(frame: .zero, configuration: config)
+		webView.allowsMagnification = true
+		webView.allowsBackForwardNavigationGestures = true
+		webView.navigationDelegate = coordinator
+		webView.uiDelegate = coordinator
+		
+		// Additional privacy configurations
+		if hideIpAddress {
+			webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15"
+		}
+		
+		// Move the URL loading to the coordinator
+		coordinator.loadInitialURL()
+		
+		return webView
 	}
 	
 	func makeNSView(context: Context) -> WebContainerView {
@@ -25,13 +66,16 @@ struct WebViewContainer: NSViewRepresentable {
 		let containerView = WebContainerView()
 		containerView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
 		
-		// Create and configure WebView
-		let webView = createWebView(coordinator: context.coordinator)
-		containerView.webView = webView
+		let coordinator = context.coordinator
 		
-		// Load initial URL
-		let request = URLRequest(url: tab.url)
-		webView.load(request)
+		let webView = WebViewStore.shared.getOrCreateWebView(
+			for: tab.id,
+			createWebView: { createWebView(coordinator: coordinator) }
+		)
+		
+		containerView.webView = webView
+		coordinator.setCurrentWebView(webView)
+		coordinator.tabID = tab.id
 		
 		return containerView
 	}
@@ -39,49 +83,57 @@ struct WebViewContainer: NSViewRepresentable {
 	func updateNSView(_ containerView: WebContainerView, context: Context) {
 		print("Updating container for tab: \(tab.id)")
 		
-		if containerView.webView == nil {
-			// Recreate WebView if missing
-			let webView = createWebView(coordinator: context.coordinator)
+		let coordinator = context.coordinator
+		
+		let webView = WebViewStore.shared.getOrCreateWebView(
+			for: tab.id,
+			createWebView: { createWebView(coordinator: coordinator) }
+		)
+		
+		if containerView.webView !== webView {
 			containerView.webView = webView
-			let request = URLRequest(url: tab.url)
-			webView.load(request)
+			coordinator.setCurrentWebView(webView)
+			coordinator.tabID = tab.id
 		}
 		
-		// Update visibility
-		containerView.isHidden = !isVisible
-		containerView.webView?.isHidden = !isVisible
-		
-		// Update frame
+		// Update privacy settings if they've changed
 		if let webView = containerView.webView {
-			webView.frame = containerView.bounds
+			if hideIpAddress {
+				webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15"
+			} else {
+				webView.customUserAgent = nil
+			}
 		}
+		
+		containerView.isHidden = !isVisible
+		webView.frame = containerView.bounds
+		webView.autoresizingMask = [.width, .height]
+		
+		containerView.layout()
 	}
 	
 	static func dismantleNSView(_ containerView: WebContainerView, coordinator: WebViewCoordinator) {
-		print("Dismantling container for tab: \(coordinator.tabID)")
-		if let webView = containerView.webView {
-			webView.stopLoading()
-			webView.navigationDelegate = nil
-			webView.uiDelegate = nil
-			webView.removeFromSuperview()
+		let tabID = coordinator.tabID
+		print("Dismantling container for tab: \(tabID)")
+		
+		guard let tab = coordinator.getTab() else {
+			WebViewStore.shared.remove(for: tabID)
+			containerView.webView = nil
+			coordinator.clearWebView()
+			return
 		}
-		containerView.webView = nil
+		
+		if !tab.isPinned {
+			WebViewStore.shared.remove(for: tabID)
+			containerView.webView = nil
+			coordinator.clearWebView()
+		}
 	}
 	
-	private func createWebView(coordinator: WebViewCoordinator) -> WKWebView {
-		print("Creating WebView for tab: \(tab.id)")
-		
-		let config = WKWebViewConfiguration()
-		config.websiteDataStore = WKWebsiteDataStore.default()
-		config.applicationNameForUserAgent = "Version/17.2.1 Safari/605.1.15"
-		
-		let webView = WKWebView(frame: .zero, configuration: config)
-		webView.navigationDelegate = coordinator
-		webView.uiDelegate = coordinator
-		webView.allowsMagnification = true
-		webView.allowsBackForwardNavigationGestures = true
-		
-		return webView
+	func makeCoordinator() -> WebViewCoordinator {
+		let coordinator = WebViewCoordinator(self)
+		print("Created new coordinator for tab: \(tab.id)")
+		return coordinator
 	}
 }
 

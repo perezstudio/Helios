@@ -19,7 +19,9 @@ struct URLBar: View {
 	@State private var urlError: String?
 	
 	private func updateURLText(from url: URL) {
-		urlText = url.absoluteString
+		if !isFocused {
+			urlText = url.absoluteString
+		}
 	}
 	
 	var body: some View {
@@ -40,7 +42,7 @@ struct URLBar: View {
 					.onChange(of: isFocused) { _, newValue in
 						isEditing = newValue
 						if !newValue {
-							urlText = selectedTab?.url.absoluteString ?? ""
+							updateURLText(from: selectedTab?.url ?? URL(string: "about:blank")!)
 						}
 					}
 			}
@@ -67,8 +69,7 @@ struct URLBar: View {
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .webViewURLChanged)) { notification in
 			if let urlChange = notification.object as? WebViewURLChange,
-			   urlChange.tab.id == selectedTab?.id,
-			   !isFocused {
+			   urlChange.tab.id == selectedTab?.id {
 				updateURLText(from: urlChange.url)
 			}
 		}
@@ -152,6 +153,9 @@ extension Notification.Name {
 	static let selectBookmarkedTab = Notification.Name("selectBookmarkedTab")
 	static let selectPinnedTab = Notification.Name("selectPinnedTab")
 	static let loadURL = Notification.Name("loadURL")
+	static let selectNewTab = Notification.Name("selectNewTab")
+	static let newTabCreated = Notification.Name("newTabCreated")
+	static let registerClearDataOnQuit = Notification.Name("registerClearDataOnQuit")
 }
 
 struct WebViewURLChange {

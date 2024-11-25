@@ -12,41 +12,31 @@ import WebKit
 class WebContainerView: NSView {
 	weak var webView: WKWebView? {
 		willSet {
-			// Remove old WebView
-			if let oldWebView = webView, oldWebView !== newValue {
-				print("Removing old WebView")
-				oldWebView.removeFromSuperview()
+			if newValue !== webView {
+				webView?.removeFromSuperview()
 			}
 		}
 		didSet {
-			// Add new WebView
-			if let newWebView = webView, newWebView.superview !== self {
-				print("Adding new WebView to container")
-				addSubview(newWebView)
-				newWebView.frame = bounds
-				newWebView.autoresizingMask = [.width, .height]
+			if let webView = webView, webView.superview !== self {
+				webView.translatesAutoresizingMaskIntoConstraints = false
+				addSubview(webView)
 				
-				// Force layout update
-				needsLayout = true
+				NSLayoutConstraint.activate([
+					webView.topAnchor.constraint(equalTo: topAnchor),
+					webView.leadingAnchor.constraint(equalTo: leadingAnchor),
+					webView.trailingAnchor.constraint(equalTo: trailingAnchor),
+					webView.bottomAnchor.constraint(equalTo: bottomAnchor)
+				])
+				
+				layout()
 			}
 		}
 	}
 	
 	override func layout() {
 		super.layout()
-		print("Container layout update - bounds: \(bounds)")
-		webView?.frame = bounds
-	}
-	
-	override var frame: NSRect {
-		didSet {
-			print("Container frame updated to: \(frame)")
+		if frame.size.width > 0 && frame.size.height > 0 {
 			webView?.frame = bounds
 		}
-	}
-	
-	deinit {
-		print("WebContainerView deinit")
-		webView?.removeFromSuperview()
 	}
 }
