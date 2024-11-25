@@ -103,6 +103,7 @@ struct TabRow: View {
 			RoundedRectangle(cornerRadius: 6)
 				.fill(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
 		)
+		.contentShape(Rectangle())  // Make entire row interactive for drag and tap
 		.contextMenu {
 			if let workspace = tab.workspace {
 				Button("Pin Tab") {
@@ -128,6 +129,32 @@ struct TabRow: View {
 				}
 			}
 		}
-		.draggable(tab)
+		.draggable(TabTransferID(id: tab.id)) {
+			// Preview
+			HStack(spacing: 12) {
+				Group {
+					if let favicon = tab.favicon,
+					   let image = NSImage(data: favicon) {
+						Image(nsImage: image)
+							.resizable()
+							.frame(width: 16, height: 16)
+					} else {
+						Image(systemName: "globe")
+							.frame(width: 16, height: 16)
+					}
+				}
+				
+				Text(tab.title)
+					.lineLimit(1)
+					.truncationMode(.middle)
+			}
+			.padding(.horizontal, 12)
+			.padding(.vertical, 8)
+			.background(
+				RoundedRectangle(cornerRadius: 6)
+					.fill(Color.accentColor.opacity(0.2))
+			)
+			.opacity(0.8)
+		}
 	}
 }

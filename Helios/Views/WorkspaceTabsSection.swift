@@ -45,23 +45,30 @@ struct WorkspaceTabsSection: View {
 				.padding(.vertical, 8)
 				
 				// Tabs List
-				ScrollView {
-					LazyVStack(spacing: 2) {
-						NewTabRow(showingNewTabSheet: $showingNewTabSheet)
-							.padding(.bottom, 2)
-						
-						ForEach(workspace.orderedTabs) { tab in
-							DraggableTabRow(
-								tab: tab,
-								isSelected: selectedTab?.id == tab.id,
-								workspace: workspace,
-								onSelect: { selectTab(tab) },
-								onClose: { closeTab(tab) }
-							)
-						}
+				List {
+					NewTabRow(showingNewTabSheet: $showingNewTabSheet)
+						.listRowInsets(EdgeInsets())
+						.listRowBackground(Color.clear)
+					
+					ForEach(workspace.orderedTabs) { tab in
+						TabRow(
+							tab: tab,
+							isSelected: selectedTab?.id == tab.id,
+							onSelect: { selectTab(tab) },
+							onClose: { closeTab(tab) }
+						)
+						.listRowInsets(EdgeInsets())
+						.listRowBackground(Color.clear)
+						.contentShape(Rectangle())  // Make entire row draggable
 					}
-					.padding(.vertical, 2)
+					.onMove { from, to in
+						guard let fromIndex = from.first else { return }
+						workspace.moveTab(workspace.orderedTabs[fromIndex], to: to)
+						try? modelContext.save()
+					}
 				}
+				.listStyle(.plain)
+				.environment(\.defaultMinListRowHeight, 0)
 			}
 		}
 		.sheet(isPresented: $showingProfileChangeSheet) {
@@ -87,7 +94,6 @@ struct WorkspaceTabsSection: View {
 	
 	private func closeTab(_ tab: Tab) {
 		if selectedTab?.id == tab.id {
-			// Find the next tab to select
 			if let index = workspace.orderedTabs.firstIndex(where: { $0.id == tab.id }) {
 				if index > 0 {
 					selectedTab = workspace.orderedTabs[index - 1]
@@ -99,7 +105,6 @@ struct WorkspaceTabsSection: View {
 			}
 		}
 		
-		// Close the tab
 		WebViewStore.shared.remove(for: tab.id)
 		workspace.removeTab(tab)
 		try? modelContext.save()
