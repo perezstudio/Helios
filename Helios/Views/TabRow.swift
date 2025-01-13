@@ -16,6 +16,15 @@ struct TabRow: View {
 	
 	var body: some View {
 		HStack {
+			if let faviconData = tab.faviconData,
+			   let uiImage = NSImage(data: faviconData) {
+				Image(nsImage: uiImage)
+					.resizable()
+					.frame(width: 16, height: 16)
+			} else {
+				Image(systemName: "globe")
+					.frame(width: 16, height: 16)
+			}
 			Text(tab.title)
 				.lineLimit(1)
 			Spacer()

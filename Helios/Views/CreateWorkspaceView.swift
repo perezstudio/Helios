@@ -16,14 +16,14 @@ struct CreateWorkspaceView: View {
 	var workspaceToEdit: Workspace?
 	
 	// Change these to use a StateObject for form state
-	@StateObject private var formState = WorkspaceFormState()
+	@StateObject private var formState: WorkspaceFormState
 	@State private var showIconPicker = false
 	@State private var showCreateProfileSheet = false
 	@State private var showDeleteAlert = false
 	
 	let availableColors = ColorTheme.allCases
 	
-	@Query var profiles: [Profile]
+	@Query(sort: \Profile.name) private var profiles: [Profile]
 	
 	var isEditing: Bool {
 		workspaceToEdit != nil
@@ -63,13 +63,6 @@ struct CreateWorkspaceView: View {
 						}
 					}
 				}
-				.popover(isPresented: $showIconPicker) {
-					IconPicker(
-						selectedIcon: $formState.selectedIcon,
-						selectedGroup: $formState.selectedIconGroup
-					)
-					.frame(width: 300, height: 400)
-				}
 				
 				// Color Selection
 				Section(header: Text("Color")) {
@@ -97,10 +90,10 @@ struct CreateWorkspaceView: View {
 							showCreateProfileSheet.toggle()
 						}
 					} else {
-						Picker("Profile", selection: $formState.selectedProfile) {
-							Text("None").tag(nil as Profile?)
+						Picker("Profile", selection: $formState.selectedProfile.animation()) {
+							Text("None").tag(Optional<Profile>.none)
 							ForEach(profiles) { profile in
-								Text(profile.name).tag(profile as Profile?)
+								Text(profile.name).tag(Optional(profile))
 							}
 						}
 						
@@ -112,24 +105,21 @@ struct CreateWorkspaceView: View {
 				
 				if isEditing {
 					Section {
-						
+						Button(role: .destructive) {
+							showDeleteAlert = true
+						} label: {
+							HStack {
+								Spacer()
+								Text("Delete Workspace")
+								Spacer()
+							}
+						}
 					}
 				}
 			}
 			.formStyle(.grouped)
 			.navigationTitle(isEditing ? "Edit Workspace" : "New Workspace")
 			.toolbar {
-				ToolbarItem(placement: .destructiveAction) {
-					Button(role: .destructive) {
-						showDeleteAlert = true
-					} label: {
-						HStack {
-							Spacer()
-							Text("Delete Workspace")
-							Spacer()
-						}
-					}
-				}
 				ToolbarItem(placement: .cancellationAction) {
 					Button("Cancel") {
 						isPresented = false
@@ -147,28 +137,27 @@ struct CreateWorkspaceView: View {
 					.disabled(formState.workspaceName.isEmpty)
 				}
 			}
-			.alert("Delete Workspace", isPresented: $showDeleteAlert) {
-				Button("Cancel", role: .cancel) { }
-				Button("Delete", role: .destructive) {
-					deleteWorkspace()
-					isPresented = false
-				}
-			} message: {
-				Text("Are you sure you want to delete this workspace? This action cannot be undone.")
-			}
-			.sheet(isPresented: $showCreateProfileSheet) {
-				CreateProfileView()
-			}
 		}
 		.frame(maxWidth: .infinity)
 		.frame(height: 500)
-		.onAppear {
-			if let workspace = workspaceToEdit {
-				formState.workspaceName = workspace.name
-				formState.selectedIcon = workspace.icon
-				formState.selectedColor = workspace.colorTheme
-				formState.selectedProfile = workspace.profile
+		.popover(isPresented: $showIconPicker) {
+			IconPicker(
+				selectedIcon: $formState.selectedIcon,
+				selectedGroup: $formState.selectedIconGroup
+			)
+			.frame(width: 300, height: 400)
+		}
+		.sheet(isPresented: $showCreateProfileSheet) {
+			CreateProfileView()
+		}
+		.alert("Delete Workspace", isPresented: $showDeleteAlert) {
+			Button("Cancel", role: .cancel) { }
+			Button("Delete", role: .destructive) {
+				deleteWorkspace()
+				isPresented = false
 			}
+		} message: {
+			Text("Are you sure you want to delete this workspace? This action cannot be undone.")
 		}
 	}
 	
@@ -176,18 +165,18 @@ struct CreateWorkspaceView: View {
 		viewModel.addWorkspace(
 			name: formState.workspaceName,
 			icon: formState.selectedIcon,
-			colorTheme: formState.selectedColor, // Changed from color to colorTheme
+			colorTheme: formState.selectedColor,
 			profile: formState.selectedProfile
 		)
 	}
-
+	
 	private func updateWorkspace() {
 		guard let workspace = workspaceToEdit else { return }
 		viewModel.updateWorkspace(
 			workspace,
 			name: formState.workspaceName,
 			icon: formState.selectedIcon,
-			colorTheme: formState.selectedColor, // Changed from color to colorTheme
+			colorTheme: formState.selectedColor,
 			profile: formState.selectedProfile
 		)
 	}

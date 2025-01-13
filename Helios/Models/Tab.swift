@@ -16,6 +16,7 @@ class Tab {
 	var url: String
 	var type: TabType
 	var workspace: Workspace?
+	var faviconData: Data? // Add storage for favicon
 	
 	init(title: String, url: String, type: TabType, workspace: Workspace? = nil) {
 		self.id = UUID()
@@ -23,6 +24,7 @@ class Tab {
 		self.url = url
 		self.type = type
 		self.workspace = workspace
+		self.faviconData = nil
 	}
 }
 
