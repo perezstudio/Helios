@@ -1,31 +1,34 @@
+
 import SwiftUI
 import SwiftData
 import WebKit
 
 @main
 struct HeliosApp: App {
+	@StateObject private var browserViewModel = BrowserViewModel()
 	
-	// Create and configure the model container for SwiftData
-	var sharedModelContainer: ModelContainer = {
-		// List all the models you want to persist
-		let schema = Schema([
-			Profile.self,
-			Workspace.self,
-			Tab.self,
-			HistoryItem.self
-		])
-		
-		// Define model configuration (with options for storage location)
-		let config = ModelConfiguration(schema: schema)
-		
-		// Create and return the container
-		return try! ModelContainer(for: schema, configurations: [config])
-	}()
+	let container: ModelContainer
+	
+	init() {
+		do {
+			// Configure the container with schema and storage options
+			let config = ModelConfiguration(
+				"Helios-DB",
+				schema: Schema([Profile.self, Workspace.self, Tab.self, HistoryEntry.self]),
+				isStoredInMemoryOnly: false,
+				allowsSave: true
+			)
+			container = try ModelContainer(for: Profile.self, Workspace.self, Tab.self, HistoryEntry.self, configurations: config)
+		} catch {
+			fatalError("Could not initialize ModelContainer: \(error)")
+		}
+	}
 	
 	var body: some Scene {
 		WindowGroup {
 			ContentView()
+				.modelContainer(container)
+				.environmentObject(browserViewModel)
 		}
-		.modelContainer(sharedModelContainer)
 	}
 }

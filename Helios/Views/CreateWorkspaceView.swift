@@ -9,124 +9,210 @@ import SwiftUI
 import SwiftData
 
 struct CreateWorkspaceView: View {
-	
 	@Environment(\.modelContext) var modelContext
-	@Environment(\.dismiss) var dismiss
+	@EnvironmentObject var viewModel: BrowserViewModel
+	@Binding var isPresented: Bool
+	
+	var workspaceToEdit: Workspace?
+	
+	// Change these to use a StateObject for form state
+	@StateObject private var formState = WorkspaceFormState()
+	@State private var showIconPicker = false
+	@State private var showCreateProfileSheet = false
+	@State private var showDeleteAlert = false
+	
+	let availableColors = ColorTheme.allCases
+	
 	@Query var profiles: [Profile]
 	
-	@State var workspaceName: String = ""
-	@State var workspaceIcon: String = "square.stack" // Default icon
-	@State var selectedProfile: Profile?
-	@State var createProfileSheet: Bool = false
-	@State var showIconPicker: Bool = false // Toggle for popover visibility
-	@State var selectedIconGroup: IconGroup = iconGroups.first! // Default icon group
+	var isEditing: Bool {
+		workspaceToEdit != nil
+	}
 	
-	// Alerts
-	@State private var showAlert = false
-	@State private var alertMessage = ""
+	init(isPresented: Binding<Bool>, workspaceToEdit: Workspace?) {
+		self._isPresented = isPresented
+		self.workspaceToEdit = workspaceToEdit
+		
+		// Initialize formState with values from workspaceToEdit if available
+		let initialState = WorkspaceFormState(
+			workspaceName: workspaceToEdit?.name ?? "",
+			selectedIcon: workspaceToEdit?.icon ?? "square.stack",
+			selectedColor: workspaceToEdit?.colorTheme ?? ColorTheme.defaultTheme,
+			selectedProfile: workspaceToEdit?.profile
+		)
+		self._formState = StateObject(wrappedValue: initialState)
+	}
 	
 	var body: some View {
-		Form {
-			// Workspace Name & Icon Picker Section
-			Section(header: Text("Workspace Info")) {
-				TextField("Workspace Name", text: $workspaceName)
+		NavigationStack {
+			Form {
+				// Workspace Name
+				Section(header: Text("Workspace Name")) {
+					TextField("Name", text: $formState.workspaceName)
+				}
 				
-				HStack {
-					Text("Workspace Icon")
-					Spacer()
-					Button {
-						showIconPicker.toggle()
-					} label: {
-						Image(systemName: workspaceIcon)
-							.font(.system(size: 24)) // Display selected icon
-							.padding()
-							.background(Color.gray.opacity(0.50))
-							.cornerRadius(8)
-					}
-					.popover(isPresented: $showIconPicker) {
-						IconPicker(selectedIcon: $workspaceIcon, selectedGroup: $selectedIconGroup)
-							.frame(width: 300, height: 400) // Set size for popover
+				// Icon Selection
+				Section(header: Text("Icon")) {
+					HStack {
+						Image(systemName: formState.selectedIcon)
+							.foregroundColor(Color(formState.selectedColor.rawValue))
+							.font(.title2)
+						
+						Button("Choose Icon") {
+							showIconPicker.toggle()
+						}
 					}
 				}
-			}
-			
-			// Profile Selection
-			Section(header: Text("Profile")) {
-				HStack {
-					if !profiles.isEmpty {
-						Picker("Profile", selection: Binding(
-							get: { selectedProfile },
-							set: { newValue in selectedProfile = newValue }
-						)) {
-							Text("None").tag(nil as Profile?) // Allow nil selection
+				.popover(isPresented: $showIconPicker) {
+					IconPicker(
+						selectedIcon: $formState.selectedIcon,
+						selectedGroup: $formState.selectedIconGroup
+					)
+					.frame(width: 300, height: 400)
+				}
+				
+				// Color Selection
+				Section(header: Text("Color")) {
+					LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 10) {
+						ForEach(availableColors, id: \.self) { color in
+							Circle()
+								.fill(color.color)
+								.frame(width: 30, height: 30)
+								.overlay(
+									Circle()
+										.stroke(Color.primary, lineWidth: formState.selectedColor == color ? 2 : 0)
+								)
+								.onTapGesture {
+									formState.selectedColor = color
+								}
+						}
+					}
+					.padding(.vertical, 8)
+				}
+				
+				// Profile Selection
+				Section(header: Text("Profile")) {
+					if profiles.isEmpty {
+						Button("Create Profile") {
+							showCreateProfileSheet.toggle()
+						}
+					} else {
+						Picker("Profile", selection: $formState.selectedProfile) {
+							Text("None").tag(nil as Profile?)
 							ForEach(profiles) { profile in
 								Text(profile.name).tag(profile as Profile?)
 							}
 						}
-					} else {
-						Text("You need to create a profile before creating a workspace")
+						
+						Button("Create New Profile") {
+							showCreateProfileSheet.toggle()
+						}
 					}
-					
-					// Create Profile Button
-					Button {
-						createProfileSheet.toggle()
-					} label: {
-						Label("Create New Profile", systemImage: "person.crop.circle")
+				}
+				
+				if isEditing {
+					Section {
+						
 					}
 				}
 			}
-			
-			// Create Workspace Button
-			Button {
-				createWorkspace()
-			} label: {
-				Label("Create Workspace", systemImage: "square.stack")
+			.formStyle(.grouped)
+			.navigationTitle(isEditing ? "Edit Workspace" : "New Workspace")
+			.toolbar {
+				ToolbarItem(placement: .destructiveAction) {
+					Button(role: .destructive) {
+						showDeleteAlert = true
+					} label: {
+						HStack {
+							Spacer()
+							Text("Delete Workspace")
+							Spacer()
+						}
+					}
+				}
+				ToolbarItem(placement: .cancellationAction) {
+					Button("Cancel") {
+						isPresented = false
+					}
+				}
+				ToolbarItem(placement: .confirmationAction) {
+					Button(isEditing ? "Save" : "Create") {
+						if isEditing {
+							updateWorkspace()
+						} else {
+							createWorkspace()
+						}
+						isPresented = false
+					}
+					.disabled(formState.workspaceName.isEmpty)
+				}
+			}
+			.alert("Delete Workspace", isPresented: $showDeleteAlert) {
+				Button("Cancel", role: .cancel) { }
+				Button("Delete", role: .destructive) {
+					deleteWorkspace()
+					isPresented = false
+				}
+			} message: {
+				Text("Are you sure you want to delete this workspace? This action cannot be undone.")
+			}
+			.sheet(isPresented: $showCreateProfileSheet) {
+				CreateProfileView()
 			}
 		}
-		.padding()
-		.sheet(isPresented: $createProfileSheet) {
-			CreateProfileView()
-		}
+		.frame(maxWidth: .infinity)
+		.frame(height: 500)
 		.onAppear {
-			if selectedProfile == nil && !profiles.isEmpty {
-				selectedProfile = profiles.first
+			if let workspace = workspaceToEdit {
+				formState.workspaceName = workspace.name
+				formState.selectedIcon = workspace.icon
+				formState.selectedColor = workspace.colorTheme
+				formState.selectedProfile = workspace.profile
 			}
-		}
-		.alert(isPresented: $showAlert) {
-			Alert(title: Text("Error"), message: Text(alertMessage), dismissButton: .default(Text("OK")))
 		}
 	}
 	
-	// MARK: - Create Workspace Function
-	func createWorkspace() {
-		// Validation
-		guard let profile = selectedProfile else {
-			alertMessage = "Please select a profile before creating a workspace."
-			showAlert = true
-			return
-		}
-		
-		guard !workspaceName.isEmpty else {
-			alertMessage = "Workspace name cannot be empty."
-			showAlert = true
-			return
-		}
-		
-		// Add workspace to the selected profile
-		profile.addWorkspace(name: workspaceName, icon: workspaceIcon)
-		
-		// Save context explicitly
-		do {
-			try modelContext.save()
-			print("Workspace '\(workspaceName)' created successfully in profile '\(profile.name)'")
-			dismiss()
-		} catch {
-			alertMessage = "Failed to save workspace: \(error.localizedDescription)"
-			showAlert = true
-		}
+	private func createWorkspace() {
+		viewModel.addWorkspace(
+			name: formState.workspaceName,
+			icon: formState.selectedIcon,
+			colorTheme: formState.selectedColor, // Changed from color to colorTheme
+			profile: formState.selectedProfile
+		)
+	}
+
+	private func updateWorkspace() {
+		guard let workspace = workspaceToEdit else { return }
+		viewModel.updateWorkspace(
+			workspace,
+			name: formState.workspaceName,
+			icon: formState.selectedIcon,
+			colorTheme: formState.selectedColor, // Changed from color to colorTheme
+			profile: formState.selectedProfile
+		)
+	}
+	
+	private func deleteWorkspace() {
+		guard let workspace = workspaceToEdit else { return }
+		viewModel.deleteWorkspace(workspace)
 	}
 }
 
-#Preview {
-	CreateWorkspaceView()
+// Add this class just before or after CreateWorkspaceView
+class WorkspaceFormState: ObservableObject {
+	@Published var workspaceName: String
+	@Published var selectedIcon: String
+	@Published var selectedColor: ColorTheme
+	@Published var selectedIconGroup = iconGroups.first!
+	@Published var selectedProfile: Profile?
+	
+	init(workspaceName: String = "",
+		 selectedIcon: String = "square.stack",
+		 selectedColor: ColorTheme = ColorTheme.defaultTheme,
+		 selectedProfile: Profile? = nil) {
+		self.workspaceName = workspaceName
+		self.selectedIcon = selectedIcon
+		self.selectedColor = selectedColor
+		self.selectedProfile = selectedProfile
+	}
 }

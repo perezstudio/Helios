@@ -6,16 +6,34 @@
 //
 
 import SwiftUI
+import SwiftData
 import WebKit
 
 struct WebView: NSViewRepresentable {
-	let webView: WKWebView // Dynamic web view instance
+	@Binding var url: URL?
 
 	func makeNSView(context: Context) -> WKWebView {
-		return webView // Always create with the provided instance
+		let webView = WKWebView()
+		webView.navigationDelegate = context.coordinator
+		return webView
 	}
 
 	func updateNSView(_ nsView: WKWebView, context: Context) {
-		// No need to update anything dynamically here
+		if let url = url {
+			let request = URLRequest(url: url)
+			nsView.load(request)
+		}
+	}
+
+	func makeCoordinator() -> Coordinator {
+		Coordinator(self)
+	}
+
+	class Coordinator: NSObject, WKNavigationDelegate {
+		var parent: WebView
+
+		init(_ parent: WebView) {
+			self.parent = parent
+		}
 	}
 }

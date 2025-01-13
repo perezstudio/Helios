@@ -4,21 +4,23 @@
 //
 //  Created by Kevin Perez on 1/6/25.
 //
+
 import SwiftUI
 import SwiftData
 
 @Model
 class Profile {
-    var id: UUID = UUID()
-    var name: String
-    var workspaces: [Workspace] = []
-    
-    init(name: String) {
-        self.name = name
-    }
+	@Attribute(.unique) var id: UUID
+	var name: String
+	var pinnedTabs: [Tab]
+	var workspaces: [Workspace]
+	var history: [HistoryEntry]
 	
-	func addWorkspace(name: String, icon: String) {
-		let workspace = Workspace(name: name, icon: icon)
-		workspaces.append(workspace)
+	init(name: String) {
+		self.id = UUID()
+		self.name = name
+		self.pinnedTabs = []
+		self.workspaces = []
+		self.history = []
 	}
 }

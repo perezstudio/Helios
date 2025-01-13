@@ -10,20 +10,32 @@ import SwiftData
 import WebKit
 
 struct ContentView: View {
-	// Shared state for URL management and web navigation
-	@StateObject private var webService = WebNavigationService()
-	@State private var selectedWorkspace: Workspace? = nil
-	@State private var selectedTab: Tab? = nil
-	
+	@Environment(\.modelContext) var modelContext
+	@EnvironmentObject var viewModel: BrowserViewModel
+
 	var body: some View {
 		NavigationSplitView {
-			SidebarView(selectedWorkspace: $selectedWorkspace, webService: webService, selectedTab: $selectedTab)
+			SidebarView()
 		} detail: {
-			BrowserView(selectedTab: $selectedTab)
+			if let currentTab = viewModel.currentTab {
+				WebViewContainer(webView: viewModel.getWebView(for: currentTab))
+					.id(currentTab.id)
+					.transition(.opacity)
+			} else {
+				ContentUnavailableView(
+					"No Tab Selected",
+					systemImage: "magnifyingglass",
+					description: Text("Please enter a URL or perform a search.")
+				)
+				.transition(.opacity)
+			}
+		}
+		.onAppear {
+			viewModel.setModelContext(modelContext)
 		}
 	}
 }
 
 //#Preview {
-//	ContentView()
+//    ContentView()
 //}

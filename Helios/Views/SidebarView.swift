@@ -6,116 +6,123 @@
 //
 
 import SwiftUI
-import SwiftData
+import WebKit
 
 struct SidebarView: View {
 	@Environment(\.modelContext) var modelContext
-	@Binding var selectedWorkspace: Workspace?   // Selected workspace
-	@Query var workspaces: [Workspace]
-	@ObservedObject var webService: WebNavigationService // Shared web service
-
-	@State private var createWorkspaceSheet: Bool = false // Controls workspace creation sheet
-	@Binding var selectedTab: Tab? // Use Bindable for dynamic updates
-	@State private var tempURL: String = "" // Temporary URL field for editing
+	@EnvironmentObject var viewModel: BrowserViewModel
+	@State private var showWorkspaceSheet = false
+	@State private var editingWorkspace: Workspace?
 
 	var body: some View {
 		VStack {
-			// Tabs Section
-			List {
-				// Pinned Tabs
+			// URL Bar
+			TextField("Enter URL or search", text: $viewModel.urlInput, onCommit: {
+				viewModel.handleUrlInput()
+			})
+			.textFieldStyle(.roundedBorder)
+			.padding(.horizontal)
+			.padding(.top)
+
+			// Tabs List
+			List(selection: $viewModel.currentTab) {
 				Section(header: Text("Pinned Tabs")) {
-					ForEach(selectedWorkspace?.pinnedTabs ?? []) { tab in
-						TabView(selectedTab: $selectedTab, tab: tab)
-							.onTapGesture { selectTab(tab) }
+					ForEach(viewModel.pinnedTabs, id: \.id) { tab in
+						TabRow(tab: tab)
 					}
 				}
-
-				// Bookmarked Tabs
-				Section(header: Text("Bookmarks")) {
-					ForEach(selectedWorkspace?.bookmarkTabs ?? []) { tab in
-						TabView(selectedTab: $selectedTab, tab: tab)
-							.onTapGesture { selectTab(tab) }
+				Section(header: Text("Bookmark Tabs")) {
+					ForEach(viewModel.bookmarkTabs, id: \.id) { tab in
+						TabRow(tab: tab)
 					}
 				}
-
-				// Normal Tabs
-				Section(header: Text("Tabs")) {
-					// Button to create a new tab with default values
-					Button {
-						addNewTab()
-					} label: {
+				Section(header: Text("Normal Tabs")) {
+					ForEach(viewModel.normalTabs, id: \.id) { tab in
+						TabRow(tab: tab)
+					}
+					Button(action: {
+						viewModel.addNewTab()
+					}) {
 						Label("New Tab", systemImage: "plus")
 					}
-
-					ForEach(selectedWorkspace?.normalTabs ?? []) { tab in
-						TabView(selectedTab: $selectedTab, tab: tab)
-							.onTapGesture {
-								selectedTab = tab
-								print(tab.url)
-								print(tab.title)
-							}
-					}
 				}
 			}
+			.listStyle(SidebarListStyle()) // Native macOS sidebar styling
 
-			// Workspace Switcher
+			Divider()
+
+			// Workspace Picker and Add Workspace Button
 			HStack {
-				Picker("", selection: $selectedWorkspace) {
-					ForEach(workspaces) { workspace in
-						Image(systemName: workspace.icon).tag(workspace as Workspace?)
+				if viewModel.currentWorkspace != nil {
+					Button(action: {
+						editingWorkspace = viewModel.currentWorkspace
+						showWorkspaceSheet = true
+					}) {
+						Image(systemName: "pencil.circle")
 					}
+					.help("Edit Workspace")
 				}
-				.pickerStyle(.segmented)
+				if(viewModel.workspaces.count <= 6) {
+					Picker("", selection: $viewModel.currentWorkspace) {
+						ForEach(viewModel.workspaces, id: \.id) { workspace in
+							Label(workspace.name, systemImage: workspace.icon).tag(workspace)
+								.labelStyle(.iconOnly)
+						}
+					}
+					.pickerStyle(.segmented)
+				} else {
+					Picker("", selection: $viewModel.currentWorkspace) {
+						ForEach(viewModel.workspaces, id: \.id) { workspace in
+							Label(workspace.name, systemImage: workspace.icon).tag(workspace)
+						}
+					}
+					.pickerStyle(.menu)
+				}
 
-				// Create Workspace Button
-				Button {
-					createWorkspaceSheet.toggle()
-				} label: {
-					Label("Create Workspace", systemImage: "plus.app")
-						.labelStyle(.iconOnly)
+				Button(action: {
+					editingWorkspace = nil
+					showWorkspaceSheet = true
+				}) {
+					Image(systemName: "plus.circle")
+				}
+				.help("Add Workspace")
+			}
+			.padding(.horizontal, 4)
+			.padding(.vertical, 4)
+			.padding(.bottom, 4)
+			.toolbar {
+				ToolbarItemGroup(placement: .primaryAction) {
+					Spacer()
+					Button(action: {
+						viewModel.goBack()
+					}) {
+						Image(systemName: "chevron.left")
+					}
+					.help("Go Back")
+//					.disabled(!viewModel.canGoBack)
+
+					Button(action: {
+						viewModel.goForward()
+					}) {
+						Image(systemName: "chevron.right")
+					}
+					.help("Go Forward")
+//					.disabled(!viewModel.canGoForward)
+
+					Button(action: {
+						viewModel.refresh()
+					}) {
+						Image(systemName: "arrow.clockwise")
+					}
+					.help("Refresh")
 				}
 			}
-			.padding(.vertical)
-			.padding(.trailing, 8)
-		}
-		.frame(minWidth: 250)
-		.sheet(isPresented: $createWorkspaceSheet) {
-			CreateWorkspaceView()
-		}
-	}
-
-	// MARK: - Add New Tab
-	private func addNewTab() {
-		guard let workspace = selectedWorkspace else { return }
-
-		// Create a new tab with default URL and title
-		let newTab = Tab(title: "New Tab", url: "https://www.google.com")
-		workspace.normalTabs.append(newTab)
-
-		// Persist changes
-		saveContext()
-
-		// Select the new tab and load it
-		selectTab(newTab)
-	}
-
-	// MARK: - Select Tab
-	private func selectTab(_ tab: Tab) {
-		print("Selecting tab with title: \(tab.title), URL: \(tab.url)")
-		print("Current web view URL: \(tab.webService.url)")
-		// Update selected tab and reload if necessary
-		selectedTab = tab
-		if tab.webService.url != tab.url {
-			tab.webService.loadURL(tab.url)
-		}
-	}
-
-	// MARK: - Save Context
-	private func saveContext() {
-		do {
-			try modelContext.save()
-		} catch {
-			print("Failed to save context: \(error)")
+			.sheet(isPresented: $showWorkspaceSheet) {
+				CreateWorkspaceView(
+					isPresented: $showWorkspaceSheet,
+					workspaceToEdit: editingWorkspace
+				)
+			}
 		}
 	}
 }
