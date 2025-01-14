@@ -1,4 +1,3 @@
-
 import SwiftUI
 import SwiftData
 import WebKit
@@ -30,5 +29,12 @@ struct HeliosApp: App {
 				.modelContainer(container)
 				.environmentObject(browserViewModel)
 		}
+		
+		// Settings Window
+		Settings {
+			SettingsView()
+				.modelContainer(container)
+		}
+		.windowStyle(.titleBar)
 	}
 }
