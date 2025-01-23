@@ -19,6 +19,7 @@ class BrowserViewModel: ObservableObject {
 	@Published var bookmarkTabs: [Tab] = []
 	@Published var normalTabs: [Tab] = []
 	@Published var workspaces: [Workspace] = []
+	@Published var urlBarFocused: Bool = false
 	
 	private var tabSelectionsByWindow: [UUID: UUID] = [:]
 	private var workspaceSelectionsByWindow: [UUID: UUID] = [:]
@@ -121,19 +122,8 @@ class BrowserViewModel: ObservableObject {
 		}
 	}
 	
-	func addNewPinnedTab(title: String = "New Tab", url: String = "about:blank") {
-		guard let context = modelContext,
-			  let profile = currentWorkspace?.profile else { return }
-		
-		// Create a single pinned tab associated with the profile
-		let newTab = Tab(title: title, url: url, type: .pinned)
-		context.insert(newTab)
-		profile.pinnedTabs.append(newTab)
-		
-		// Update pinned tabs view
-		updatePinnedTabsForProfile(profile)
-		saveChanges()
-	}
+	
+
 	
 	@Published var currentTab: Tab? = nil {
 		didSet {
@@ -309,34 +299,56 @@ class BrowserViewModel: ObservableObject {
 	}
 
 	
-	func addNewTab(title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) {
+	func addNewTab(windowId: UUID? = nil, title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) {
+		// Resolve the window ID
+		let windowUUID = windowId ?? WindowManager.shared.activeWindow ?? UUID()
+		
 		guard let context = modelContext,
-			  let currentWorkspace = currentWorkspace else { return }
+			  let currentWorkspace = getCurrentWorkspace(for: windowUUID) else { return }
 		
-		// Clear current tab selection
-		currentTab = nil
+		if type == .pinned {
+			// Handle pinned tabs at profile level
+			addNewPinnedTab(title: title, url: url)
+			return
+		}
 		
-		DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-			if type == .pinned {
-				// Handle pinned tabs at profile level
-				self.addNewPinnedTab(title: title, url: url)
-			} else {
-				// Create workspace-specific tab
-				let newTab = Tab(title: title, url: url, type: type, workspace: currentWorkspace)
-				context.insert(newTab)
-				currentWorkspace.tabs.append(newTab)
-				
-				// Update appropriate tabs array
-				if type == .normal {
-					self.normalTabs.append(newTab)
-				} else if type == .bookmark {
-					self.bookmarkTabs.append(newTab)
-				}
-				
-				self.currentTab = newTab
+		// Create the new tab
+		let newTab = Tab(title: title, url: url, type: type, workspace: currentWorkspace)
+		context.insert(newTab)
+		currentWorkspace.tabs.append(newTab)
+		
+		// Update UI state
+		DispatchQueue.main.async {
+			// Add to appropriate tabs array
+			if type == .normal {
+				self.normalTabs.append(newTab)
+			} else if type == .bookmark {
+				self.bookmarkTabs.append(newTab)
 			}
+			
+			// Ensure WebView is created before selecting the tab
+			self.ensureWebView(for: newTab)
+			
+			// Select the new tab and focus URL bar
+			self.selectTab(newTab, for: windowUUID)
+			self.urlBarFocused = true
+			
 			self.saveChanges()
 		}
+	}
+	
+	func addNewPinnedTab(title: String = "New Tab", url: String = "about:blank") {
+		guard let context = modelContext,
+			  let profile = currentWorkspace?.profile else { return }
+		
+		// Create a single pinned tab associated with the profile
+		let newTab = Tab(title: title, url: url, type: .pinned)
+		context.insert(newTab)
+		profile.pinnedTabs.append(newTab)
+		
+		// Update pinned tabs view
+		updatePinnedTabsForProfile(profile)
+		saveChanges()
 	}
 	
 	func deleteTab(_ tab: Tab) {
@@ -504,10 +516,14 @@ class BrowserViewModel: ObservableObject {
 			// Load the URL
 			if let url = URL(string: tab.url), url.scheme != nil {
 				print("Loading URL: \(url.absoluteString) for tab \(tab.id)")
-				webView.load(URLRequest(url: url))
-			} else {
+				let request = URLRequest(url: url)
+				webView.load(request)
+			} else if tab.url == "about:blank" {
 				print("Loading blank page for tab: \(tab.id)")
-				webView.load(URLRequest(url: URL(string: "about:blank")!))
+				webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
+			} else {
+				print("Loading blank page for invalid URL: \(tab.url) for tab \(tab.id)")
+				webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
 			}
 		}
 	}
@@ -610,6 +626,7 @@ class BrowserViewModel: ObservableObject {
 	func selectTab(_ tab: Tab?, for windowId: UUID) {
 		// Update backing store
 		tabSelectionsByWindow[windowId] = tab?.id
+		currentTab = tab
 		
 		// Update UI state asynchronously
 		DispatchQueue.main.async {

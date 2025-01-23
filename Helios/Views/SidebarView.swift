@@ -14,6 +14,7 @@ struct SidebarView: View {
 	@EnvironmentObject var viewModel: BrowserViewModel
 	@State private var showWorkspaceSheet = false
 	@State private var editingWorkspace: Workspace?
+	@FocusState private var isUrlBarFocused: Bool
 
 	var body: some View {
 		VStack {
@@ -24,6 +25,7 @@ struct SidebarView: View {
 			.textFieldStyle(.roundedBorder)
 			.padding(.horizontal)
 			.padding(.top)
+			.focused($isUrlBarFocused)
 
 			// Tabs List
 			List(selection: Binding(
@@ -135,6 +137,12 @@ struct SidebarView: View {
 					isPresented: $showWorkspaceSheet,
 					workspaceToEdit: editingWorkspace
 				)
+			}
+		}
+		.onChange(of: viewModel.urlBarFocused) { _, newValue in
+			isUrlBarFocused = newValue
+			if !newValue {
+				viewModel.urlBarFocused = false
 			}
 		}
 	}

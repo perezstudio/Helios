@@ -47,6 +47,14 @@ struct HeliosApp: App {
 					openNewWindow()
 				}
 				.keyboardShortcut("n", modifiers: [.command])
+				
+				Button("New Tab") {
+					if let focusedWindow = NSApp.keyWindow,
+					   let windowId = focusedWindow.identifier?.rawValue {
+						browserViewModel.addNewTab()
+					}
+				}
+				.keyboardShortcut("t", modifiers: [.command])
 			}
 		}
 		
