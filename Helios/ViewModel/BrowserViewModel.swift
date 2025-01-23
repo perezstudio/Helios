@@ -58,8 +58,9 @@ class BrowserViewModel: ObservableObject {
 			// Unpinning: Remove from profile's pinned tabs
 			profile.pinnedTabs.removeAll { $0.id == tab.id }
 			
-			// Create a new normal tab in the current workspace
+			// Create a new normal tab in the current workspace, preserving favicon
 			let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: currentWorkspace)
+			newTab.faviconData = tab.faviconData  // Preserve favicon
 			context.insert(newTab)
 			currentWorkspace?.tabs.append(newTab)
 			
@@ -74,8 +75,9 @@ class BrowserViewModel: ObservableObject {
 			let wasNormal = tab.type == .normal
 			let wasBookmark = tab.type == .bookmark
 			
-			// Create new pinned tab
+			// Create new pinned tab with favicon
 			let pinnedTab = Tab(title: tab.title, url: tab.url, type: .pinned)
+			pinnedTab.faviconData = tab.faviconData  // Preserve favicon
 			context.insert(pinnedTab)
 			profile.pinnedTabs.append(pinnedTab)
 			
@@ -93,6 +95,9 @@ class BrowserViewModel: ObservableObject {
 			// Update view model state
 			pinnedTabs.append(pinnedTab)
 			context.delete(tab)
+			
+			// Ensure WebView is created for the new pinned tab to refresh favicon if needed
+			ensureWebView(for: pinnedTab)
 		}
 		
 		saveChanges()
