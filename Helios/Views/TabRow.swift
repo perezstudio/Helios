@@ -10,9 +10,14 @@ import SwiftData
 
 struct TabRow: View {
 	var tab: Tab
+	var windowId: UUID
 	@EnvironmentObject var viewModel: BrowserViewModel
 	@Environment(\.modelContext) var modelContext
 	@State private var showWorkspaceSheet = false
+	
+	var isSelectedInOtherWindow: Bool {
+		WindowManager.shared.isTabSelectedInOtherWindow(tab.id, currentWindow: windowId)
+	}
 	
 	var body: some View {
 		HStack {
@@ -39,6 +44,8 @@ struct TabRow: View {
 			.foregroundColor(.red)
 		}
 		.contentShape(Rectangle())
+		.opacity(isSelectedInOtherWindow ? 0.5 : 1)
+		.disabled(isSelectedInOtherWindow)
 		.contextMenu {
 			Button {
 				copyURL()
@@ -140,19 +147,6 @@ struct TabRow: View {
 	}
 	
 	private func togglePin() {
-		if tab.type == .pinned {
-			tab.type = .normal
-			if let index = viewModel.pinnedTabs.firstIndex(where: { $0.id == tab.id }) {
-				viewModel.pinnedTabs.remove(at: index)
-				viewModel.normalTabs.append(tab)
-			}
-		} else {
-			tab.type = .pinned
-			if let index = viewModel.normalTabs.firstIndex(where: { $0.id == tab.id }) {
-				viewModel.normalTabs.remove(at: index)
-				viewModel.pinnedTabs.append(tab)
-			}
-		}
-		viewModel.saveChanges()
+		viewModel.togglePin(tab)
 	}
 }

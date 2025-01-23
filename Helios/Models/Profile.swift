@@ -12,9 +12,10 @@ import SwiftData
 class Profile {
 	@Attribute(.unique) var id: UUID
 	var name: String
-	var pinnedTabs: [Tab]
+	var pinnedTabs: [Tab]  // Direct relationship for pinned tabs
 	var workspaces: [Workspace]
 	var history: [HistoryEntry]
+	@Relationship(deleteRule: .nullify) var defaultSearchEngine: SearchEngine?
 	
 	init(name: String) {
 		self.id = UUID()
@@ -22,5 +23,6 @@ class Profile {
 		self.pinnedTabs = []
 		self.workspaces = []
 		self.history = []
+		self.defaultSearchEngine = nil
 	}
 }

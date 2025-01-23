@@ -192,8 +192,10 @@ class WorkspaceFormState: ObservableObject {
 	@Published var workspaceName: String
 	@Published var selectedIcon: String
 	@Published var selectedColor: ColorTheme
-	@Published var selectedIconGroup = iconGroups.first!
 	@Published var selectedProfile: Profile?
+	@Published var selectedIconGroup: IconGroup
+	
+	private var isUpdating = false
 	
 	init(workspaceName: String = "",
 		 selectedIcon: String = "square.stack",
@@ -203,5 +205,22 @@ class WorkspaceFormState: ObservableObject {
 		self.selectedIcon = selectedIcon
 		self.selectedColor = selectedColor
 		self.selectedProfile = selectedProfile
+		self.selectedIconGroup = iconGroups.first!
+	}
+	
+	func update(name: String? = nil,
+				icon: String? = nil,
+				color: ColorTheme? = nil,
+				profile: Profile? = nil) {
+		guard !isUpdating else { return }
+		isUpdating = true
+		
+		DispatchQueue.main.async {
+			if let name = name { self.workspaceName = name }
+			if let icon = icon { self.selectedIcon = icon }
+			if let color = color { self.selectedColor = color }
+			if let profile = profile { self.selectedProfile = profile }
+			self.isUpdating = false
+		}
 	}
 }

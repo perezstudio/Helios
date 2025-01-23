@@ -9,6 +9,7 @@ import SwiftUI
 import WebKit
 
 struct SidebarView: View {
+	let windowId: UUID
 	@Environment(\.modelContext) var modelContext
 	@EnvironmentObject var viewModel: BrowserViewModel
 	@State private var showWorkspaceSheet = false
@@ -25,20 +26,23 @@ struct SidebarView: View {
 			.padding(.top)
 
 			// Tabs List
-			List(selection: $viewModel.currentTab) {
+			List(selection: Binding(
+				get: { viewModel.getSelectedTab(for: windowId) },
+				set: { viewModel.selectTab($0, for: windowId) }
+			)) {
 				Section(header: Text("Pinned Tabs")) {
 					ForEach(viewModel.pinnedTabs, id: \.id) { tab in
-						TabRow(tab: tab)
+						TabRow(tab: tab, windowId: windowId)
 					}
 				}
 				Section(header: Text("Bookmark Tabs")) {
 					ForEach(viewModel.bookmarkTabs, id: \.id) { tab in
-						TabRow(tab: tab)
+						TabRow(tab: tab, windowId: windowId)
 					}
 				}
 				Section(header: Text("Normal Tabs")) {
 					ForEach(viewModel.normalTabs, id: \.id) { tab in
-						TabRow(tab: tab)
+						TabRow(tab: tab, windowId: windowId)
 					}
 					Button(action: {
 						viewModel.addNewTab()
@@ -53,32 +57,41 @@ struct SidebarView: View {
 
 			// Workspace Picker and Add Workspace Button
 			HStack {
-				if viewModel.currentWorkspace != nil {
+				if viewModel.getCurrentWorkspace(for: windowId) != nil {
 					Button(action: {
-						editingWorkspace = viewModel.currentWorkspace
+						editingWorkspace = viewModel.getCurrentWorkspace(for: windowId)
 						showWorkspaceSheet = true
 					}) {
 						Image(systemName: "pencil.circle")
 					}
 					.help("Edit Workspace")
 				}
-				if(viewModel.workspaces.count <= 6) {
-					Picker("", selection: $viewModel.currentWorkspace) {
+				
+				if viewModel.workspaces.count <= 6 {
+					Picker("", selection: Binding(
+						get: { viewModel.getCurrentWorkspace(for: windowId) },
+						set: { viewModel.setCurrentWorkspace($0, for: windowId) }
+					)) {
 						ForEach(viewModel.workspaces, id: \.id) { workspace in
-							Label(workspace.name, systemImage: workspace.icon).tag(workspace)
+							Label(workspace.name, systemImage: workspace.icon)
+								.tag(Optional(workspace))
 								.labelStyle(.iconOnly)
 						}
 					}
 					.pickerStyle(.segmented)
 				} else {
-					Picker("", selection: $viewModel.currentWorkspace) {
+					Picker("", selection: Binding(
+						get: { viewModel.getCurrentWorkspace(for: windowId) },
+						set: { viewModel.setCurrentWorkspace($0, for: windowId) }
+					)) {
 						ForEach(viewModel.workspaces, id: \.id) { workspace in
-							Label(workspace.name, systemImage: workspace.icon).tag(workspace)
+							Label(workspace.name, systemImage: workspace.icon)
+								.tag(Optional(workspace))
 						}
 					}
 					.pickerStyle(.menu)
 				}
-
+				
 				Button(action: {
 					editingWorkspace = nil
 					showWorkspaceSheet = true

@@ -13,36 +13,123 @@ import Combine
 
 class BrowserViewModel: ObservableObject {
 	var modelContext: ModelContext?
-	@Published var urlInput: String = "" // URL bar input
+	@Published var urlInput: String = ""
 	@Published var currentURL: URL? = nil
 	@Published var pinnedTabs: [Tab] = []
 	@Published var bookmarkTabs: [Tab] = []
 	@Published var normalTabs: [Tab] = []
 	@Published var workspaces: [Workspace] = []
+	
+	private var tabSelectionsByWindow: [UUID: UUID] = [:]
+	private var workspaceSelectionsByWindow: [UUID: UUID] = [:]
+	private var currentProfile: Profile? = nil
+	
+	func setUrlInput(_ input: String) {
+		DispatchQueue.main.async {
+			self.urlInput = input
+		}
+	}
+	
 	@Published var currentWorkspace: Workspace? = nil {
 		didSet {
-			if let workspace = currentWorkspace {
-				// Handle profile switching
+			// Only handle profile switching here
+			if let workspace = currentWorkspace,
+			   workspace.profile?.id != currentProfile?.id {
 				switchToProfile(workspace.profile)
-				
-				// Load all tabs from the workspace and filter them by type
-				let allTabs = workspace.tabs
-				normalTabs = allTabs.filter { $0.type == .normal }
-				bookmarkTabs = allTabs.filter { $0.type == .bookmark }
-				pinnedTabs = allTabs.filter { $0.type == .pinned }
-				
-				// Set current tab to first normal tab if it exists
-				if currentTab == nil && !normalTabs.isEmpty {
-					currentTab = normalTabs.first
-				}
-			} else {
-				normalTabs = []
-				bookmarkTabs = []
-				pinnedTabs = []
-				currentTab = nil
 			}
 		}
 	}
+	
+	private func updatePinnedTabsForProfile(_ profile: Profile?) {
+		DispatchQueue.main.async {
+			if let profile = profile {
+				self.pinnedTabs = profile.pinnedTabs
+			} else {
+				self.pinnedTabs = []
+			}
+		}
+	}
+	
+	func togglePin(_ tab: Tab) {
+		guard let context = modelContext,
+			  let profile = currentWorkspace?.profile else { return }
+		
+		if tab.type == .pinned {
+			// Unpinning: Remove from profile's pinned tabs
+			profile.pinnedTabs.removeAll { $0.id == tab.id }
+			
+			// Create a new normal tab in the current workspace
+			let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: currentWorkspace)
+			context.insert(newTab)
+			currentWorkspace?.tabs.append(newTab)
+			
+			// Update view model state
+			pinnedTabs.removeAll { $0.id == tab.id }
+			normalTabs.append(newTab)
+			
+			// Delete the original pinned tab
+			context.delete(tab)
+		} else {
+			// Pinning: Move to profile's pinned tabs
+			let wasNormal = tab.type == .normal
+			let wasBookmark = tab.type == .bookmark
+			
+			// Create new pinned tab
+			let pinnedTab = Tab(title: tab.title, url: tab.url, type: .pinned)
+			context.insert(pinnedTab)
+			profile.pinnedTabs.append(pinnedTab)
+			
+			// Remove the original tab
+			if wasNormal {
+				normalTabs.removeAll { $0.id == tab.id }
+			} else if wasBookmark {
+				bookmarkTabs.removeAll { $0.id == tab.id }
+			}
+			
+			if let workspace = tab.workspace {
+				workspace.tabs.removeAll { $0.id == tab.id }
+			}
+			
+			// Update view model state
+			pinnedTabs.append(pinnedTab)
+			context.delete(tab)
+		}
+		
+		saveChanges()
+	}
+	
+	func switchToProfile(_ profile: Profile?) {
+		if profile?.id != currentProfile?.id {
+			currentProfile = profile
+			updatePinnedTabsForProfile(profile)
+			
+			// Clean up existing WebViews
+			if let oldProfile = currentProfile {
+				webViewsByProfile[oldProfile.id]?.removeAll()
+				navigationDelegatesByProfile[oldProfile.id]?.removeAll()
+			}
+			
+			// Create new configuration if needed
+			if let profile = profile {
+				_ = getOrCreateConfiguration(for: profile)
+			}
+		}
+	}
+	
+	func addNewPinnedTab(title: String = "New Tab", url: String = "about:blank") {
+		guard let context = modelContext,
+			  let profile = currentWorkspace?.profile else { return }
+		
+		// Create a single pinned tab associated with the profile
+		let newTab = Tab(title: title, url: url, type: .pinned)
+		context.insert(newTab)
+		profile.pinnedTabs.append(newTab)
+		
+		// Update pinned tabs view
+		updatePinnedTabsForProfile(profile)
+		saveChanges()
+	}
+	
 	@Published var currentTab: Tab? = nil {
 		didSet {
 			if let currentTab = currentTab {
@@ -60,6 +147,7 @@ class BrowserViewModel: ObservableObject {
 			}
 		}
 	}
+	
 	func setModelContext(_ context: ModelContext) {
 		self.modelContext = context
 		loadSavedData()  // Load data once we have the context
@@ -182,22 +270,6 @@ class BrowserViewModel: ObservableObject {
 		
 		try? FileManager.default.removeItem(at: profileDirectory)
 	}
-	
-	func switchToProfile(_ profile: Profile?) {
-		// Clean up existing WebViews
-		if let currentWorkspace = currentWorkspace,
-		   let currentProfile = currentWorkspace.profile,
-		   currentProfile.id != profile?.id {
-			// Clear current WebViews but don't remove configurations
-			webViewsByProfile[currentProfile.id]?.removeAll()
-			navigationDelegatesByProfile[currentProfile.id]?.removeAll()
-		}
-		
-		// Create new configuration if needed
-		if let profile = profile {
-			_ = getOrCreateConfiguration(for: profile)
-		}
-	}
 
 	// MARK: - Public Methods
 
@@ -233,63 +305,102 @@ class BrowserViewModel: ObservableObject {
 
 	
 	func addNewTab(title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) {
-		 guard let context = modelContext else { return }
-		 currentTab = nil
-
-		 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-			 let newTab = Tab(title: title, url: url, type: type, workspace: self.currentWorkspace)
-			 context.insert(newTab)
-			 self.normalTabs.append(newTab)
-			 self.currentTab = newTab
-			 self.saveChanges()
-		 }
-	 }
-
+		guard let context = modelContext,
+			  let currentWorkspace = currentWorkspace else { return }
+		
+		// Clear current tab selection
+		currentTab = nil
+		
+		DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+			if type == .pinned {
+				// Handle pinned tabs at profile level
+				self.addNewPinnedTab(title: title, url: url)
+			} else {
+				// Create workspace-specific tab
+				let newTab = Tab(title: title, url: url, type: type, workspace: currentWorkspace)
+				context.insert(newTab)
+				currentWorkspace.tabs.append(newTab)
+				
+				// Update appropriate tabs array
+				if type == .normal {
+					self.normalTabs.append(newTab)
+				} else if type == .bookmark {
+					self.bookmarkTabs.append(newTab)
+				}
+				
+				self.currentTab = newTab
+			}
+			self.saveChanges()
+		}
+	}
 	
 	func deleteTab(_ tab: Tab) {
-		// Clear currentTab first if this is the current tab
-		if currentTab?.id == tab.id {
-			currentTab = nil
+		// Remove selections for this tab
+		let affectedWindows = tabSelectionsByWindow.filter { $0.value == tab.id }.map { $0.key }
+		for windowId in affectedWindows {
+			tabSelectionsByWindow[windowId] = nil
 		}
 		
-		if let index = normalTabs.firstIndex(where: { $0.id == tab.id }) {
-			let profileId = tab.workspace?.profile?.id ?? UUID()
-			
-			// Remove the WebView first
-			if let webView = webViewsByProfile[profileId]?[tab.id] {
-				webView.stopLoading()
-				webView.loadHTMLString("", baseURL: nil)
-				webViewsByProfile[profileId]?.removeValue(forKey: tab.id)
-				navigationDelegatesByProfile[profileId]?.removeValue(forKey: tab.id)
+		if tab.type == .pinned {
+			// Handle pinned tab deletion across all workspaces in the profile
+			if let profile = tab.workspace?.profile {
+				for workspace in profile.workspaces {
+					workspace.tabs.removeAll { pinnedTab in
+						pinnedTab.type == .pinned && pinnedTab.url == tab.url
+					}
+				}
+				updatePinnedTabsForProfile(profile)
 			}
-			
-			// Remove the tab from the array
-			normalTabs.remove(at: index)
-			
-			// Update current tab after removing the tab
-			if normalTabs.isEmpty {
-				currentTab = nil
-			} else {
-				currentTab = normalTabs[max(0, index - 1)]
+		} else {
+			// Handle normal/bookmark tab deletion
+			if let workspace = tab.workspace {
+				workspace.tabs.removeAll { $0.id == tab.id }
+				
+				if tab.type == .normal {
+					normalTabs.removeAll { $0.id == tab.id }
+					
+					// Update current tab selection
+					for windowId in affectedWindows {
+						if !normalTabs.isEmpty {
+							if let index = normalTabs.firstIndex(where: { $0.id == tab.id }) {
+								selectTab(normalTabs[max(0, index - 1)], for: windowId)
+							}
+						} else {
+							selectTab(nil, for: windowId)
+						}
+					}
+				} else {
+					bookmarkTabs.removeAll { $0.id == tab.id }
+				}
 			}
-			
-			saveChanges()
 		}
+		
+		// Clean up WebView
+		cleanupWebView(for: tab)
+		
+		// Delete from context
+		modelContext?.delete(tab)
+		saveChanges()
 	}
 
 	func addWorkspace(name: String, icon: String, colorTheme: ColorTheme, profile: Profile?) {
 		guard let context = modelContext else { return }
+		
+		// Create workspace outside of state update
 		let workspace = Workspace(name: name, icon: icon, colorTheme: colorTheme)
 		workspace.profile = profile
-		context.insert(workspace)
-		workspaces.append(workspace)
 		
-		// Handle profile configuration when creating workspace
-		if let profile = profile {
-			_ = getOrCreateConfiguration(for: profile)
+		// Update context
+		context.insert(workspace)
+		
+		// Update state asynchronously
+		DispatchQueue.main.async {
+			self.workspaces.append(workspace)
+			if let windowId = WindowManager.shared.activeWindow {
+				self.setCurrentWorkspace(workspace, for: windowId)
+			}
 		}
 		
-		currentWorkspace = workspace
 		saveChanges()
 	}
 	
@@ -311,6 +422,7 @@ class BrowserViewModel: ObservableObject {
 		// Force view update
 		if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
 			workspaces[index] = workspace
+			objectWillChange.send()
 		}
 	}
 
@@ -484,4 +596,70 @@ class BrowserViewModel: ObservableObject {
 			}
 		}
 	}
+	
+	func getSelectedTab(for windowId: UUID) -> Tab? {
+		guard let tabId = tabSelectionsByWindow[windowId] else { return nil }
+		return (normalTabs + bookmarkTabs + pinnedTabs).first(where: { $0.id == tabId })
+	}
+	
+	func selectTab(_ tab: Tab?, for windowId: UUID) {
+		// Update backing store
+		tabSelectionsByWindow[windowId] = tab?.id
+		
+		// Update UI state asynchronously
+		DispatchQueue.main.async {
+			if let tab = tab {
+				self.setUrlInput(tab.url)
+				self.ensureWebView(for: tab)
+			} else {
+				self.setUrlInput("")
+			}
+		}
+	}
+	
+	func getCurrentWorkspace(for windowId: UUID) -> Workspace? {
+		if let workspaceId = workspaceSelectionsByWindow[windowId] {
+			return workspaces.first(where: { $0.id == workspaceId })
+		}
+		return workspaces.first
+	}
+	
+	func setCurrentWorkspace(_ workspace: Workspace?, for windowId: UUID) {
+		workspaceSelectionsByWindow[windowId] = workspace?.id
+		
+		DispatchQueue.main.async {
+			if let workspace = workspace {
+				// Switch profile if needed
+				if workspace.profile?.id != self.currentProfile?.id {
+					self.switchToProfile(workspace.profile)
+				}
+				
+				// Update workspace-specific tabs
+				self.bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
+				self.normalTabs = workspace.tabs.filter { $0.type == .normal }
+				
+				// Update current tab selection
+				if self.getSelectedTab(for: windowId) == nil && !self.normalTabs.isEmpty {
+					self.selectTab(self.normalTabs.first, for: windowId)
+				}
+			} else {
+				self.bookmarkTabs = []
+				self.normalTabs = []
+				self.selectTab(nil, for: windowId)
+			}
+			
+			self.currentWorkspace = workspace
+		}
+	}
+	
+	private func cleanupWebView(for tab: Tab) {
+		let profileId = tab.workspace?.profile?.id ?? UUID()
+		if let webView = webViewsByProfile[profileId]?[tab.id] {
+			webView.stopLoading()
+			webView.loadHTMLString("", baseURL: nil)
+			webViewsByProfile[profileId]?.removeValue(forKey: tab.id)
+			navigationDelegatesByProfile[profileId]?.removeValue(forKey: tab.id)
+		}
+	}
+	
 }

@@ -22,6 +22,10 @@ struct SettingsView: View {
 					.tabItem {
 						Label("Profiles", systemImage: "person.circle")
 					}
+				SearchEngineSettingsView()
+					.tabItem {
+						Label("Search", systemImage: "magnifyingglass")
+					}
 			}
 		}
 		.navigationTitle("Settings")

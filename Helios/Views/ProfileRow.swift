@@ -23,6 +23,8 @@ struct ProfileRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+			
+			Spacer()
         }
         .padding(.vertical, 4)
     }

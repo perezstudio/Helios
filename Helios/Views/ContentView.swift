@@ -12,12 +12,13 @@ import WebKit
 struct ContentView: View {
 	@Environment(\.modelContext) var modelContext
 	@EnvironmentObject var viewModel: BrowserViewModel
-
+	@StateObject private var windowId = WindowIdentifier()
+	
 	var body: some View {
 		NavigationSplitView {
-			SidebarView()
+			SidebarView(windowId: windowId.id)
 		} detail: {
-			if let currentTab = viewModel.currentTab {
+			if let currentTab = viewModel.getSelectedTab(for: windowId.id) {
 				WebViewContainer(webView: viewModel.getWebView(for: currentTab))
 					.id(currentTab.id)
 					.transition(.opacity)
@@ -32,8 +33,17 @@ struct ContentView: View {
 		}
 		.onAppear {
 			viewModel.setModelContext(modelContext)
+			WindowManager.shared.registerWindow(windowId.id)
 		}
+		.onDisappear {
+			WindowManager.shared.unregisterWindow(windowId.id)
+		}
+		.focusedSceneValue(\.windowId, windowId.id)
 	}
+}
+
+class WindowIdentifier: ObservableObject {
+	let id = UUID()
 }
 
 //#Preview {
