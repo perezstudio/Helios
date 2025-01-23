@@ -271,17 +271,31 @@ class BrowserViewModel: ObservableObject {
 	func handleUrlInput() {
 		guard let currentTab = currentTab else { return }
 		
-		var urlString = urlInput
-		if !urlString.contains("://") {
-			urlString = "https://" + urlString
+		let input = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
+		
+		// If input is empty or about:blank, do nothing
+		guard !input.isEmpty && input != "about:blank" else { return }
+		
+		if looksLikeUrl(input) {
+			// Handle as URL
+			let formattedUrl = formatUrlString(input)
+			guard let url = URL(string: formattedUrl) else { return }
+			
+			currentURL = url
+			currentTab.url = url.absoluteString
+			getWebView(for: currentTab).load(URLRequest(url: url))
+		} else {
+			// Handle as search
+			if let searchEngine = currentWorkspace?.profile?.defaultSearchEngine ?? SearchEngine.defaultEngines.first {
+				let searchUrl = searchEngine.searchUrl.replacingOccurrences(of: "%s", with: input.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+				
+				if let url = URL(string: searchUrl) {
+					currentURL = url
+					currentTab.url = url.absoluteString
+					getWebView(for: currentTab).load(URLRequest(url: url))
+				}
+			}
 		}
-		
-		guard let url = URL(string: urlString) else { return }
-		
-		currentURL = url
-		currentTab.url = url.absoluteString
-		
-		getWebView(for: currentTab).load(URLRequest(url: url))
 		
 		saveChanges()
 	}
@@ -682,6 +696,36 @@ class BrowserViewModel: ObservableObject {
 			webViewsByProfile[profileId]?.removeValue(forKey: tab.id)
 			navigationDelegatesByProfile[profileId]?.removeValue(forKey: tab.id)
 		}
+	}
+	
+	private func looksLikeUrl(_ input: String) -> Bool {
+		// Ignore special URLs
+		if input.starts(with: "about:") {
+			return false
+		}
+		
+		// Basic pattern for domain names
+		let pattern = "^([a-zA-Z0-9]([a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}$"
+		let domainPredicate = NSPredicate(format: "SELF MATCHES %@", pattern)
+		
+		// Remove any protocols and www before checking
+		let strippedInput = input
+			.replacingOccurrences(of: "https://", with: "")
+			.replacingOccurrences(of: "http://", with: "")
+			.replacingOccurrences(of: "www.", with: "")
+		
+		return domainPredicate.evaluate(with: strippedInput)
+	}
+
+	private func formatUrlString(_ input: String) -> String {
+		var urlString = input.trimmingCharacters(in: .whitespacesAndNewlines)
+		
+		// Check if the URL already has a protocol
+		if !urlString.contains("://") {
+			urlString = "https://" + urlString
+		}
+		
+		return urlString
 	}
 	
 }
