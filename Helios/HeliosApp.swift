@@ -5,34 +5,55 @@ import WebKit
 @main
 struct HeliosApp: App {
 	@StateObject private var browserViewModel = BrowserViewModel()
-	
 	let container: ModelContainer
 	
 	init() {
 		do {
-			// Configure the container with schema and storage options
-			let config = ModelConfiguration(
-				"Helios-DB",
-				schema: Schema([Profile.self, Workspace.self, Tab.self, HistoryEntry.self, SearchEngine.self]),
+			let schema = Schema([
+				Profile.self,
+				Workspace.self,
+				Tab.self,
+				HistoryEntry.self,
+				SearchEngine.self
+			])
+			
+			let modelConfiguration = ModelConfiguration(
+				schema: schema,
 				isStoredInMemoryOnly: false,
 				allowsSave: true
 			)
 			
+			// Create container with schema
 			container = try ModelContainer(
-				for: Profile.self,
-				Workspace.self,
-				Tab.self,
-				HistoryEntry.self,
-				SearchEngine.self,
-				configurations: config
+				for: schema,
+				migrationPlan: AppMigrationPlan.self,
+				configurations: modelConfiguration
 			)
 			
 			// Initialize default search engines if needed
 			initializeDefaultSearchEngines()
 			
 		} catch {
+			print("Error initializing container: \(error)")
 			fatalError("Could not initialize ModelContainer: \(error)")
 		}
+	}
+	
+	private func initializeDefaultSearchEngines() {
+		let context = container.mainContext
+		
+		// Check if search engines already exist
+		let descriptor = FetchDescriptor<SearchEngine>()
+		guard let count = try? context.fetch(descriptor).count, count == 0 else {
+			return
+		}
+		
+		// Insert default search engines
+		SearchEngine.defaultEngines.forEach { engine in
+			context.insert(engine)
+		}
+		
+		try? context.save()
 	}
 	
 	var body: some Scene {
@@ -58,29 +79,11 @@ struct HeliosApp: App {
 			}
 		}
 		
-		// Settings Window
 		Settings {
 			SettingsView()
 				.modelContainer(container)
 		}
 		.windowStyle(.titleBar)
-	}
-	
-	private func initializeDefaultSearchEngines() {
-		let context = container.mainContext
-		
-		// Check if search engines already exist
-		let descriptor = FetchDescriptor<SearchEngine>()
-		guard let count = try? context.fetch(descriptor).count, count == 0 else {
-			return
-		}
-		
-		// Insert default search engines
-		SearchEngine.defaultEngines.forEach { engine in
-			context.insert(engine)
-		}
-		
-		try? context.save()
 	}
 	
 	private func openNewWindow() {

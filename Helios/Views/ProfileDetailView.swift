@@ -30,6 +30,24 @@ struct ProfileDetailView: View {
 						Text(engine.name).tag(Optional(engine))
 					}
 				}
+				
+				Picker("User Agent", selection: .init(
+					get: { profile.userAgentType },
+					set: { newValue in
+						profile.userAgentType = newValue
+						try? modelContext.save()
+						// Refresh WebViews to apply new user agent
+						NotificationCenter.default.post(
+							name: NSNotification.Name("RefreshWebViews"),
+							object: nil,
+							userInfo: ["profileId": profile.id]
+						)
+					}
+				)) {
+					ForEach(UserAgent.allCases, id: \.self) { agent in
+						Text(agent.name).tag(agent)
+					}
+				}
 			}
 			
 			Section("Data Management") {

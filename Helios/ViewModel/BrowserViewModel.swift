@@ -615,6 +615,30 @@ class BrowserViewModel: ObservableObject {
 		)
 		webView.navigationDelegate = navigationDelegate
 		navigationDelegatesByProfile[profileId]?[tab.id] = navigationDelegate
+		
+		// Configure user agent
+		configureUserAgent(webView, for: profile)
+		
+		// Add notification observer for user agent changes
+		NotificationCenter.default.addObserver(
+			forName: NSNotification.Name("RefreshWebViews"),
+			object: nil,
+			queue: .main
+		) { [weak self, weak webView] notification in
+			guard let self = self,
+				  let webView = webView,
+				  let userInfo = notification.userInfo,
+				  let notifiedProfileId = userInfo["profileId"] as? UUID,
+				  notifiedProfileId == profile?.id else {
+				return
+			}
+			
+			// Update user agent for this WebView
+			self.configureUserAgent(webView, for: profile)
+			
+			// Reload the page to apply new user agent
+			webView.reload()
+		}
 	}
 	
 	private func updateUrl(_ url: String) {
@@ -728,4 +752,12 @@ class BrowserViewModel: ObservableObject {
 		return urlString
 	}
 	
+	private func configureUserAgent(_ webView: WKWebView, for profile: Profile?) {
+		if let profile = profile {
+			webView.customUserAgent = profile.userAgent
+		} else {
+			webView.customUserAgent = UserAgent.safari.rawValue
+		}
+	}
 }
+

@@ -52,3 +52,23 @@ enum ColorTheme: String, CaseIterable, Codable {
 		.blue
 	}
 }
+
+enum UserAgent: String, CaseIterable, Codable {
+	case safari = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15"
+	case chrome = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	case firefox = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0"
+	case edge = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+
+	var name: String {
+		switch self {
+		case .safari: return "Safari"
+		case .chrome: return "Chrome"
+		case .firefox: return "Firefox"
+		case .edge: return "Edge"
+		}
+	}
+
+	static var `default`: UserAgent {
+		.safari
+	}
+}

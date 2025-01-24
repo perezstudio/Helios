@@ -7,8 +7,6 @@
 
 import SwiftUI
 import SwiftData
-
-import SwiftData
 import Foundation
 
 enum WorkspaceMigrationPlan: SchemaMigrationPlan {
