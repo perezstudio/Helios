@@ -11,7 +11,7 @@ import SwiftData
 struct TabRow: View {
 	var tab: Tab
 	var windowId: UUID
-	@EnvironmentObject var viewModel: BrowserViewModel
+	@Bindable var viewModel: BrowserViewModel
 	@Environment(\.modelContext) var modelContext
 	@State private var showWorkspaceSheet = false
 	

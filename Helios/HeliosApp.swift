@@ -4,7 +4,7 @@ import WebKit
 
 @main
 struct HeliosApp: App {
-	@StateObject private var browserViewModel = BrowserViewModel()
+	@State private var browserViewModel = BrowserViewModel()
 	let container: ModelContainer
 	
 	init() {
@@ -58,9 +58,8 @@ struct HeliosApp: App {
 	
 	var body: some Scene {
 		WindowGroup {
-			ContentView()
+			ContentView(viewModel: browserViewModel)
 				.modelContainer(container)
-				.environmentObject(browserViewModel)
 		}
 		.commands {
 			CommandGroup(after: .newItem) {
@@ -72,7 +71,9 @@ struct HeliosApp: App {
 				Button("New Tab") {
 					if let focusedWindow = NSApp.keyWindow,
 					   let windowId = focusedWindow.identifier?.rawValue {
-						browserViewModel.addNewTab()
+						Task {
+							await browserViewModel.addNewTab()
+						}
 					}
 				}
 				.keyboardShortcut("t", modifiers: [.command])
@@ -95,9 +96,8 @@ struct HeliosApp: App {
 			defer: false
 		)
 		
-		let contentView = ContentView()
+		let contentView = ContentView(viewModel: browserViewModel)
 			.modelContainer(container)
-			.environmentObject(browserViewModel)
 		
 		newWindow.contentView = NSHostingView(rootView: contentView)
 		newWindow.makeKeyAndOrderFront(nil)

@@ -11,12 +11,12 @@ import WebKit
 
 struct ContentView: View {
 	@Environment(\.modelContext) var modelContext
-	@EnvironmentObject var viewModel: BrowserViewModel
-	@StateObject private var windowId = WindowIdentifier()
+	@Bindable var viewModel: BrowserViewModel
+	@State private var windowId = WindowIdentifier()
 	
 	var body: some View {
 		NavigationSplitView {
-			SidebarView(windowId: windowId.id)
+			SidebarView(windowId: windowId.id, viewModel: viewModel)
 		} detail: {
 			if let currentTab = viewModel.getSelectedTab(for: windowId.id) {
 				WebViewContainer(webView: viewModel.getWebView(for: currentTab))

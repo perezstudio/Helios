@@ -7,19 +7,20 @@
 
 import SwiftUI
 import SwiftData
+import Observation
 
 struct CreateWorkspaceView: View {
 	@Environment(\.modelContext) var modelContext
-	@EnvironmentObject var viewModel: BrowserViewModel
+	@Bindable var viewModel: BrowserViewModel
 	@Binding var isPresented: Bool
 	
 	var workspaceToEdit: Workspace?
 	
-	// Change these to use a StateObject for form state
-	@StateObject private var formState: WorkspaceFormState
+	@State private var formState: WorkspaceFormState  // Changed from @StateObject to @State
 	@State private var showIconPicker = false
 	@State private var showCreateProfileSheet = false
 	@State private var showDeleteAlert = false
+	@State private var isProcessing = false
 	
 	let availableColors = ColorTheme.allCases
 	
@@ -29,18 +30,18 @@ struct CreateWorkspaceView: View {
 		workspaceToEdit != nil
 	}
 	
-	init(isPresented: Binding<Bool>, workspaceToEdit: Workspace?) {
+	init(viewModel: BrowserViewModel, isPresented: Binding<Bool>, workspaceToEdit: Workspace?) {
+		self.viewModel = viewModel
 		self._isPresented = isPresented
 		self.workspaceToEdit = workspaceToEdit
 		
-		// Initialize formState with values from workspaceToEdit if available
-		let initialState = WorkspaceFormState(
+		// Initialize formState using @State
+		self._formState = State(initialValue: WorkspaceFormState(
 			workspaceName: workspaceToEdit?.name ?? "",
 			selectedIcon: workspaceToEdit?.icon ?? "square.stack",
 			selectedColor: workspaceToEdit?.colorTheme ?? ColorTheme.defaultTheme,
 			selectedProfile: workspaceToEdit?.profile
-		)
-		self._formState = StateObject(wrappedValue: initialState)
+		))
 	}
 	
 	var body: some View {
@@ -124,19 +125,25 @@ struct CreateWorkspaceView: View {
 					Button("Cancel") {
 						isPresented = false
 					}
+					.disabled(isProcessing)
 				}
 				ToolbarItem(placement: .confirmationAction) {
 					Button(isEditing ? "Save" : "Create") {
-						if isEditing {
-							updateWorkspace()
-						} else {
-							createWorkspace()
+						Task {
+							isProcessing = true
+							if isEditing {
+								await updateWorkspace()
+							} else {
+								await createWorkspace()
+							}
+							isProcessing = false
+							isPresented = false
 						}
-						isPresented = false
 					}
-					.disabled(formState.workspaceName.isEmpty)
+					.disabled(formState.workspaceName.isEmpty || isProcessing)
 				}
 			}
+			.disabled(isProcessing)
 		}
 		.frame(maxWidth: .infinity)
 		.frame(height: 500)
@@ -153,16 +160,18 @@ struct CreateWorkspaceView: View {
 		.alert("Delete Workspace", isPresented: $showDeleteAlert) {
 			Button("Cancel", role: .cancel) { }
 			Button("Delete", role: .destructive) {
-				deleteWorkspace()
-				isPresented = false
+				Task {
+					await deleteWorkspace()
+					isPresented = false
+				}
 			}
 		} message: {
 			Text("Are you sure you want to delete this workspace? This action cannot be undone.")
 		}
 	}
 	
-	private func createWorkspace() {
-		viewModel.addWorkspace(
+	private func createWorkspace() async {
+		await viewModel.addWorkspace(
 			name: formState.workspaceName,
 			icon: formState.selectedIcon,
 			colorTheme: formState.selectedColor,
@@ -170,9 +179,9 @@ struct CreateWorkspaceView: View {
 		)
 	}
 	
-	private func updateWorkspace() {
+	private func updateWorkspace() async {
 		guard let workspace = workspaceToEdit else { return }
-		viewModel.updateWorkspace(
+		await viewModel.updateWorkspace(
 			workspace,
 			name: formState.workspaceName,
 			icon: formState.selectedIcon,
@@ -181,19 +190,18 @@ struct CreateWorkspaceView: View {
 		)
 	}
 	
-	private func deleteWorkspace() {
+	private func deleteWorkspace() async {
 		guard let workspace = workspaceToEdit else { return }
-		viewModel.deleteWorkspace(workspace)
+		await viewModel.deleteWorkspace(workspace)
 	}
 }
 
-// Add this class just before or after CreateWorkspaceView
-class WorkspaceFormState: ObservableObject {
-	@Published var workspaceName: String
-	@Published var selectedIcon: String
-	@Published var selectedColor: ColorTheme
-	@Published var selectedProfile: Profile?
-	@Published var selectedIconGroup: IconGroup
+@Observable class WorkspaceFormState {
+	var workspaceName: String
+	var selectedIcon: String
+	var selectedColor: ColorTheme
+	var selectedProfile: Profile?
+	var selectedIconGroup: IconGroup
 	
 	private var isUpdating = false
 	
@@ -215,12 +223,10 @@ class WorkspaceFormState: ObservableObject {
 		guard !isUpdating else { return }
 		isUpdating = true
 		
-		DispatchQueue.main.async {
-			if let name = name { self.workspaceName = name }
-			if let icon = icon { self.selectedIcon = icon }
-			if let color = color { self.selectedColor = color }
-			if let profile = profile { self.selectedProfile = profile }
-			self.isUpdating = false
-		}
+		if let name = name { self.workspaceName = name }
+		if let icon = icon { self.selectedIcon = icon }
+		if let color = color { self.selectedColor = color }
+		if let profile = profile { self.selectedProfile = profile }
+		self.isUpdating = false
 	}
 }

@@ -11,22 +11,26 @@ import WebKit
 struct SidebarView: View {
 	let windowId: UUID
 	@Environment(\.modelContext) var modelContext
-	@EnvironmentObject var viewModel: BrowserViewModel
+	@Bindable var viewModel: BrowserViewModel
 	@State private var showWorkspaceSheet = false
 	@State private var editingWorkspace: Workspace?
 	@FocusState private var isUrlBarFocused: Bool
-
+	@State private var currentWorkspace: Workspace? = nil
+	@State private var selectedWorkspace: Workspace?
+	
 	var body: some View {
 		VStack {
 			// URL Bar
 			TextField("Enter URL or search", text: $viewModel.urlInput, onCommit: {
-				viewModel.handleUrlInput()
+				Task {
+					await viewModel.handleUrlInput()
+				}
 			})
 			.textFieldStyle(.roundedBorder)
 			.padding(.horizontal)
 			.padding(.top)
 			.focused($isUrlBarFocused)
-
+			
 			// Tabs List
 			List(selection: Binding(
 				get: { viewModel.getSelectedTab(for: windowId) },
@@ -34,34 +38,36 @@ struct SidebarView: View {
 			)) {
 				Section(header: Text("Pinned Tabs")) {
 					ForEach(viewModel.pinnedTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId)
+						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
 					}
 				}
 				Section(header: Text("Bookmark Tabs")) {
 					ForEach(viewModel.bookmarkTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId)
+						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
 					}
 				}
 				Section(header: Text("Normal Tabs")) {
 					ForEach(viewModel.normalTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId)
+						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
 					}
 					Button(action: {
-						viewModel.addNewTab()
+						Task {
+							await viewModel.addNewTab()
+						}
 					}) {
 						Label("New Tab", systemImage: "plus")
 					}
 				}
 			}
 			.listStyle(SidebarListStyle()) // Native macOS sidebar styling
-
+			
 			Divider()
-
+			
 			// Workspace Picker and Add Workspace Button
 			HStack {
-				if viewModel.getCurrentWorkspace(for: windowId) != nil {
+				if let workspace = currentWorkspace {
 					Button(action: {
-						editingWorkspace = viewModel.getCurrentWorkspace(for: windowId)
+						editingWorkspace = workspace
 						showWorkspaceSheet = true
 					}) {
 						Image(systemName: "pencil.circle")
@@ -70,10 +76,7 @@ struct SidebarView: View {
 				}
 				
 				if viewModel.workspaces.count <= 6 {
-					Picker("", selection: Binding(
-						get: { viewModel.getCurrentWorkspace(for: windowId) },
-						set: { viewModel.setCurrentWorkspace($0, for: windowId) }
-					)) {
+					Picker("", selection: $selectedWorkspace) {
 						ForEach(viewModel.workspaces, id: \.id) { workspace in
 							Label(workspace.name, systemImage: workspace.icon)
 								.tag(Optional(workspace))
@@ -81,17 +84,24 @@ struct SidebarView: View {
 						}
 					}
 					.pickerStyle(.segmented)
+					.onChange(of: selectedWorkspace) { newWorkspace in
+						Task {
+							await viewModel.setCurrentWorkspace(newWorkspace, for: windowId)
+						}
+					}
 				} else {
-					Picker("", selection: Binding(
-						get: { viewModel.getCurrentWorkspace(for: windowId) },
-						set: { viewModel.setCurrentWorkspace($0, for: windowId) }
-					)) {
+					Picker("", selection: $selectedWorkspace) {
 						ForEach(viewModel.workspaces, id: \.id) { workspace in
 							Label(workspace.name, systemImage: workspace.icon)
 								.tag(Optional(workspace))
 						}
 					}
 					.pickerStyle(.menu)
+					.onChange(of: selectedWorkspace) { newWorkspace in
+						Task {
+							await viewModel.setCurrentWorkspace(newWorkspace, for: windowId)
+						}
+					}
 				}
 				
 				Button(action: {
@@ -105,6 +115,12 @@ struct SidebarView: View {
 			.padding(.horizontal, 4)
 			.padding(.vertical, 4)
 			.padding(.bottom, 4)
+			.onAppear {
+				Task {
+					currentWorkspace = await viewModel.getCurrentWorkspace(for: windowId)
+					selectedWorkspace = currentWorkspace
+				}
+			}
 			.toolbar {
 				ToolbarItemGroup(placement: .primaryAction) {
 					Spacer()
@@ -114,16 +130,14 @@ struct SidebarView: View {
 						Image(systemName: "chevron.left")
 					}
 					.help("Go Back")
-//					.disabled(!viewModel.canGoBack)
-
+					
 					Button(action: {
 						viewModel.goForward()
 					}) {
 						Image(systemName: "chevron.right")
 					}
 					.help("Go Forward")
-//					.disabled(!viewModel.canGoForward)
-
+					
 					Button(action: {
 						viewModel.refresh()
 					}) {
@@ -134,7 +148,7 @@ struct SidebarView: View {
 			}
 			.sheet(isPresented: $showWorkspaceSheet) {
 				CreateWorkspaceView(
-					isPresented: $showWorkspaceSheet,
+					viewModel: viewModel, isPresented: $showWorkspaceSheet,
 					workspaceToEdit: editingWorkspace
 				)
 			}

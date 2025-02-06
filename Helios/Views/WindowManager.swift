@@ -9,13 +9,13 @@
 import SwiftUI
 import Combine
 
-class WindowManager: ObservableObject {
+@Observable class WindowManager {
 	static let shared = WindowManager()
 	
-	@Published var activeWindow: UUID?
+	var activeWindow: UUID?
 	private var windows: Set<UUID> = []
-	private var tabSelections: [UUID: UUID] = [:] // [WindowID: TabID]
-	private var workspaceSelections: [UUID: UUID] = [:] // [WindowID: WorkspaceID]
+	private var tabSelections: [UUID: UUID] = [:]
+	private var workspaceSelections: [UUID: UUID] = [:]
 	
 	private init() {}
 	

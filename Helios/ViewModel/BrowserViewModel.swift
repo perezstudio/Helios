@@ -11,42 +11,30 @@ import WebKit
 import SwiftData
 import Combine
 
-class BrowserViewModel: ObservableObject {
+@Observable class BrowserViewModel {
 	var modelContext: ModelContext?
-	@Published var urlInput: String = ""
-	@Published var currentURL: URL? = nil
-	@Published var pinnedTabs: [Tab] = []
-	@Published var bookmarkTabs: [Tab] = []
-	@Published var normalTabs: [Tab] = []
-	@Published var workspaces: [Workspace] = []
-	@Published var urlBarFocused: Bool = false
+	var urlInput: String = ""
+	var currentURL: URL? = nil
+	var pinnedTabs: [Tab] = []
+	var bookmarkTabs: [Tab] = []
+	var normalTabs: [Tab] = []
+	var workspaces: [Workspace] = []
+	var urlBarFocused: Bool = false
+	private var currentProfile: Profile? = nil
+	private var webViewObservers: [UUID: NSObjectProtocol] = [:]
 	
 	private var tabSelectionsByWindow: [UUID: UUID] = [:]
 	private var workspaceSelectionsByWindow: [UUID: UUID] = [:]
-	private var currentProfile: Profile? = nil
+	private var webViewsByProfile: [UUID: [UUID: WKWebView]] = [:]
+	private var navigationDelegatesByProfile: [UUID: [UUID: WebViewNavigationDelegate]] = [:]
 	
-	func setUrlInput(_ input: String) {
-		DispatchQueue.main.async {
-			self.urlInput = input
-		}
-	}
-	
-	@Published var currentWorkspace: Workspace? = nil {
+	var currentWorkspace: Workspace? = nil {
 		didSet {
-			// Only handle profile switching here
 			if let workspace = currentWorkspace,
 			   workspace.profile?.id != currentProfile?.id {
-				switchToProfile(workspace.profile)
-			}
-		}
-	}
-	
-	private func updatePinnedTabsForProfile(_ profile: Profile?) {
-		DispatchQueue.main.async {
-			if let profile = profile {
-				self.pinnedTabs = profile.pinnedTabs
-			} else {
-				self.pinnedTabs = []
+				Task {
+					await switchToProfile(workspace.profile)
+				}
 			}
 		}
 	}
@@ -55,88 +43,124 @@ class BrowserViewModel: ObservableObject {
 		guard let context = modelContext,
 			  let profile = currentWorkspace?.profile else { return }
 		
-		if tab.type == .pinned {
-			// Unpinning: Remove from profile's pinned tabs
-			profile.pinnedTabs.removeAll { $0.id == tab.id }
-			
-			// Create a new normal tab in the current workspace, preserving favicon
-			let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: currentWorkspace)
-			newTab.faviconData = tab.faviconData  // Preserve favicon
-			context.insert(newTab)
-			currentWorkspace?.tabs.append(newTab)
-			
-			// Update view model state
-			pinnedTabs.removeAll { $0.id == tab.id }
-			normalTabs.append(newTab)
-			
-			// Delete the original pinned tab
-			context.delete(tab)
-		} else {
-			// Pinning: Move to profile's pinned tabs
-			let wasNormal = tab.type == .normal
-			let wasBookmark = tab.type == .bookmark
-			
-			// Create new pinned tab with favicon
-			let pinnedTab = Tab(title: tab.title, url: tab.url, type: .pinned)
-			pinnedTab.faviconData = tab.faviconData  // Preserve favicon
-			context.insert(pinnedTab)
-			profile.pinnedTabs.append(pinnedTab)
-			
-			// Remove the original tab
-			if wasNormal {
-				normalTabs.removeAll { $0.id == tab.id }
-			} else if wasBookmark {
-				bookmarkTabs.removeAll { $0.id == tab.id }
+		Task { @MainActor in
+			if tab.type == .pinned {
+				profile.pinnedTabs.removeAll { $0.id == tab.id }
+				
+				let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: currentWorkspace)
+				newTab.faviconData = tab.faviconData
+				context.insert(newTab)
+				currentWorkspace?.tabs.append(newTab)
+				
+				pinnedTabs.removeAll { $0.id == tab.id }
+				normalTabs.append(newTab)
+				context.delete(tab)
+				
+			} else {
+				let wasNormal = tab.type == .normal
+				let wasBookmark = tab.type == .bookmark
+				
+				let pinnedTab = Tab(title: tab.title, url: tab.url, type: .pinned)
+				pinnedTab.faviconData = tab.faviconData
+				context.insert(pinnedTab)
+				profile.pinnedTabs.append(pinnedTab)
+				
+				if wasNormal {
+					normalTabs.removeAll { $0.id == tab.id }
+				} else if wasBookmark {
+					bookmarkTabs.removeAll { $0.id == tab.id }
+				}
+				
+				if let workspace = tab.workspace {
+					workspace.tabs.removeAll { $0.id == tab.id }
+				}
+				
+				pinnedTabs.append(pinnedTab)
+				context.delete(tab)
+				ensureWebView(for: pinnedTab)
 			}
 			
-			if let workspace = tab.workspace {
-				workspace.tabs.removeAll { $0.id == tab.id }
+			saveChanges()
+		}
+	}
+	
+	private func cleanupWebViewsForProfile(_ profile: Profile) async {
+		await withTaskGroup(of: Void.self) { group in
+			let profileId = profile.id
+			
+			// Get all tab IDs for this profile's WebViews
+			if let webViews = webViewsByProfile[profileId] {
+				// Clean up observers for all tabs in the profile
+				for tabId in webViews.keys {
+					if let observer = webViewObservers.removeValue(forKey: tabId) {
+						NotificationCenter.default.removeObserver(observer)
+					}
+				}
+				
+				// Clean up WebViews
+				webViews.forEach { _, webView in
+					group.addTask {
+						await MainActor.run {
+							webView.stopLoading()
+							webView.loadHTMLString("", baseURL: nil)
+						}
+					}
+				}
 			}
 			
-			// Update view model state
-			pinnedTabs.append(pinnedTab)
-			context.delete(tab)
+			await group.waitForAll()
 			
-			// Ensure WebView is created for the new pinned tab to refresh favicon if needed
-			ensureWebView(for: pinnedTab)
+			await MainActor.run {
+				webViewsByProfile.removeValue(forKey: profileId)
+				navigationDelegatesByProfile.removeValue(forKey: profileId)
+			}
+		}
+	}
+	
+	deinit {
+		// Clean up all observers
+		webViewObservers.forEach { _, observer in
+			NotificationCenter.default.removeObserver(observer)
+		}
+	}
+	
+	private func recreateWebViewsForProfile(_ profile: Profile) async {
+		let profileId = profile.id
+		
+		// Initialize collections if needed
+		await MainActor.run {
+			if webViewsByProfile[profileId] == nil {
+				webViewsByProfile[profileId] = [:]
+			}
+			if navigationDelegatesByProfile[profileId] == nil {
+				navigationDelegatesByProfile[profileId] = [:]
+			}
 		}
 		
-		saveChanges()
-	}
-	
-	func switchToProfile(_ profile: Profile?) {
-		if profile?.id != currentProfile?.id {
-			currentProfile = profile
-			updatePinnedTabsForProfile(profile)
-			
-			// Clean up existing WebViews
-			if let oldProfile = currentProfile {
-				webViewsByProfile[oldProfile.id]?.removeAll()
-				navigationDelegatesByProfile[oldProfile.id]?.removeAll()
+		// Get all tabs for this profile
+		let allTabs = profile.pinnedTabs + (profile.workspaces.flatMap { $0.tabs })
+		
+		// Create WebViews sequentially to avoid overwhelming the system
+		for tab in allTabs {
+			await MainActor.run {
+				ensureWebView(for: tab)
 			}
-			
-			// Create new configuration if needed
-			if let profile = profile {
-				_ = getOrCreateConfiguration(for: profile)
-			}
+			// Small delay between WebView creations
+			try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
 		}
 	}
 	
-	
-
-	
-	@Published var currentTab: Tab? = nil {
+	var currentTab: Tab? = nil {
 		didSet {
 			if let currentTab = currentTab {
-				// Avoid updating URL if it hasn't changed
 				if urlInput != currentTab.url {
-					DispatchQueue.main.async {
+					Task { @MainActor in
 						self.urlInput = currentTab.url
 					}
 				}
 				ensureWebView(for: currentTab)
 			} else {
-				DispatchQueue.main.async {
+				Task { @MainActor in
 					self.urlInput = ""
 				}
 			}
@@ -148,8 +172,6 @@ class BrowserViewModel: ObservableObject {
 		loadSavedData()  // Load data once we have the context
 	}
 	private var navigationDelegates: [UUID: WebViewNavigationDelegate] = [:]
-	private var webViewsByProfile: [UUID: [UUID: WKWebView]] = [:]
-	private var navigationDelegatesByProfile: [UUID: [UUID: WebViewNavigationDelegate]] = [:]
 	private var webViewConfigurations: [UUID: WKWebViewConfiguration] = [:]
 
 	// Dictionary to manage WebView instances
@@ -268,16 +290,13 @@ class BrowserViewModel: ObservableObject {
 
 	// MARK: - Public Methods
 
-	func handleUrlInput() {
+	func handleUrlInput() async {
 		guard let currentTab = currentTab else { return }
 		
 		let input = urlInput.trimmingCharacters(in: .whitespacesAndNewlines)
-		
-		// If input is empty or about:blank, do nothing
 		guard !input.isEmpty && input != "about:blank" else { return }
 		
 		if looksLikeUrl(input) {
-			// Handle as URL
 			let formattedUrl = formatUrlString(input)
 			guard let url = URL(string: formattedUrl) else { return }
 			
@@ -285,40 +304,53 @@ class BrowserViewModel: ObservableObject {
 			currentTab.url = url.absoluteString
 			getWebView(for: currentTab).load(URLRequest(url: url))
 		} else {
-			// Handle as search
-			if let searchEngine = currentWorkspace?.profile?.defaultSearchEngine ?? SearchEngine.defaultEngines.first {
-				let searchUrl = searchEngine.searchUrl.replacingOccurrences(of: "%s", with: input.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
-				
-				if let url = URL(string: searchUrl) {
-					currentURL = url
-					currentTab.url = url.absoluteString
-					getWebView(for: currentTab).load(URLRequest(url: url))
-				}
-			}
+			handleSearch(input, for: currentTab)
 		}
 		
 		saveChanges()
 	}
+	
+	private func handleSearch(_ input: String, for tab: Tab) {
+		if let searchEngine = currentWorkspace?.profile?.defaultSearchEngine ?? SearchEngine.defaultEngines.first {
+			let searchUrl = searchEngine.searchUrl.replacingOccurrences(
+				of: "%s",
+				with: input.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+			)
+			
+			if let url = URL(string: searchUrl) {
+				currentURL = url
+				tab.url = url.absoluteString
+				getWebView(for: tab).load(URLRequest(url: url))
+			}
+		}
+	}
 
 	func refresh() {
-		currentTab.map { getWebView(for: $0).reload() }
+		if let tab = currentTab {
+			getWebView(for: tab).reload()
+		}
 	}
 
 	func goBack() {
-		currentTab.map { getWebView(for: $0).goBack() }
+		if let tab = currentTab {
+			getWebView(for: tab).goBack()
+		}
 	}
 
 	func goForward() {
-		currentTab.map { getWebView(for: $0).goForward() }
+		if let tab = currentTab {
+			getWebView(for: tab).goForward()
+		}
 	}
 
 	
-	func addNewTab(windowId: UUID? = nil, title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) {
+	@MainActor
+	func addNewTab(windowId: UUID? = nil, title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) async {
 		// Resolve the window ID
 		let windowUUID = windowId ?? WindowManager.shared.activeWindow ?? UUID()
 		
 		guard let context = modelContext,
-			  let currentWorkspace = getCurrentWorkspace(for: windowUUID) else { return }
+			  let currentWorkspace = await getCurrentWorkspace(for: windowUUID) else { return }
 		
 		if type == .pinned {
 			// Handle pinned tabs at profile level
@@ -331,24 +363,21 @@ class BrowserViewModel: ObservableObject {
 		context.insert(newTab)
 		currentWorkspace.tabs.append(newTab)
 		
-		// Update UI state
-		DispatchQueue.main.async {
-			// Add to appropriate tabs array
-			if type == .normal {
-				self.normalTabs.append(newTab)
-			} else if type == .bookmark {
-				self.bookmarkTabs.append(newTab)
-			}
-			
-			// Ensure WebView is created before selecting the tab
-			self.ensureWebView(for: newTab)
-			
-			// Select the new tab and focus URL bar
-			self.selectTab(newTab, for: windowUUID)
-			self.urlBarFocused = true
-			
-			self.saveChanges()
+		// Add to appropriate tabs array
+		if type == .normal {
+			normalTabs.append(newTab)
+		} else if type == .bookmark {
+			bookmarkTabs.append(newTab)
 		}
+		
+		// Ensure WebView is created before selecting the tab
+		ensureWebView(for: newTab)
+		
+		// Select the new tab and focus URL bar
+		selectTab(newTab, for: windowUUID)
+		urlBarFocused = true
+		
+		saveChanges()
 	}
 	
 	func addNewPinnedTab(title: String = "New Tab", url: String = "about:blank") {
@@ -363,6 +392,16 @@ class BrowserViewModel: ObservableObject {
 		// Update pinned tabs view
 		updatePinnedTabsForProfile(profile)
 		saveChanges()
+	}
+	
+	private func updatePinnedTabsForProfile(_ profile: Profile?) {
+		Task { @MainActor in
+			if let profile = profile {
+				self.pinnedTabs = profile.pinnedTabs
+			} else {
+				self.pinnedTabs = []
+			}
+		}
 	}
 	
 	func deleteTab(_ tab: Tab) {
@@ -414,25 +453,25 @@ class BrowserViewModel: ObservableObject {
 		saveChanges()
 	}
 
-	func addWorkspace(name: String, icon: String, colorTheme: ColorTheme, profile: Profile?) {
+	@MainActor
+	func addWorkspace(name: String, icon: String, colorTheme: ColorTheme, profile: Profile?) async {
 		guard let context = modelContext else { return }
 		
-		// Create workspace outside of state update
+		// Create workspace
 		let workspace = Workspace(name: name, icon: icon, colorTheme: colorTheme)
 		workspace.profile = profile
 		
 		// Update context
 		context.insert(workspace)
 		
-		// Update state asynchronously
-		DispatchQueue.main.async {
-			self.workspaces.append(workspace)
-			if let windowId = WindowManager.shared.activeWindow {
-				self.setCurrentWorkspace(workspace, for: windowId)
-			}
+		// Update state
+		workspaces.append(workspace)
+		
+		if let windowId = WindowManager.shared.activeWindow {
+			await setCurrentWorkspace(workspace, for: windowId)
 		}
 		
-		saveChanges()
+		try? context.save()
 	}
 	
 	func updateWorkspace(_ workspace: Workspace, name: String, icon: String, colorTheme: ColorTheme, profile: Profile?) {
@@ -445,15 +484,16 @@ class BrowserViewModel: ObservableObject {
 		
 		// If profile changed, handle the transition
 		if oldProfile?.id != profile?.id {
-			switchToProfile(profile)
+			Task {
+				await switchToProfile(profile)
+			}
 		}
 		
 		saveChanges()
 		
-		// Force view update
+		// Update workspaces array if needed
 		if let index = workspaces.firstIndex(where: { $0.id == workspace.id }) {
 			workspaces[index] = workspace
-			objectWillChange.send()
 		}
 	}
 
@@ -510,7 +550,12 @@ class BrowserViewModel: ObservableObject {
 		let profile = tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
 		
-		// Initialize profile dictionaries if needed
+		guard webViewsByProfile[profileId]?[tab.id] == nil else { return }
+		
+		let configuration = SessionManager.shared.getConfiguration(for: profile)
+		let webView = WKWebView(frame: .zero, configuration: configuration)
+		
+		// Initialize collections if needed
 		if webViewsByProfile[profileId] == nil {
 			webViewsByProfile[profileId] = [:]
 		}
@@ -518,57 +563,22 @@ class BrowserViewModel: ObservableObject {
 			navigationDelegatesByProfile[profileId] = [:]
 		}
 		
-		if webViewsByProfile[profileId]?[tab.id] == nil {
-			print("Initializing WebView for tab: \(tab.id) in profile: \(profileId)")
-			let configuration = getOrCreateConfiguration(for: profile)
-			let webView = WKWebView(frame: .zero, configuration: configuration)
-			webViewsByProfile[profileId]?[tab.id] = webView
-			
-			// Setup the navigation delegate
-			setupWebView(webView, for: tab, profile: profile)
-			
-			// Load the URL
-			if let url = URL(string: tab.url), url.scheme != nil {
-				print("Loading URL: \(url.absoluteString) for tab \(tab.id)")
-				let request = URLRequest(url: url)
-				webView.load(request)
-			} else if tab.url == "about:blank" {
-				print("Loading blank page for tab: \(tab.id)")
-				webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
-			} else {
-				print("Loading blank page for invalid URL: \(tab.url) for tab \(tab.id)")
-				webView.loadHTMLString("<html><body></body></html>", baseURL: nil)
-			}
+		// Set up WebView
+		setupWebView(webView, for: tab, profile: profile)
+		webViewsByProfile[profileId]?[tab.id] = webView
+		
+		// Load content
+		if let url = URL(string: tab.url), url.scheme != nil {
+			webView.load(URLRequest(url: url))
+		} else {
+			webView.loadHTMLString("", baseURL: nil)
 		}
 	}
 
 	func getWebView(for tab: Tab) -> WKWebView {
 		ensureWebView(for: tab)
 		let profileId = tab.workspace?.profile?.id ?? UUID()
-		
-		guard let webView = webViewsByProfile[profileId]?[tab.id] else {
-			// Create a new WebView if one doesn't exist
-			let config = getOrCreateConfiguration(for: tab.workspace?.profile)
-			let webView = WKWebView(frame: .zero, configuration: config)
-			
-			if webViewsByProfile[profileId] == nil {
-				webViewsByProfile[profileId] = [:]
-			}
-			webViewsByProfile[profileId]?[tab.id] = webView
-			
-			setupWebView(webView, for: tab, profile: tab.workspace?.profile)
-			
-			// Load the URL
-			if let url = URL(string: tab.url), url.scheme != nil {
-				webView.load(URLRequest(url: url))
-			} else {
-				webView.load(URLRequest(url: URL(string: "about:blank")!))
-			}
-			
-			return webView
-		}
-		
-		return webView
+		return webViewsByProfile[profileId]?[tab.id] ?? createWebView(for: tab)
 	}
 
 	// MARK: - Persistence
@@ -604,23 +614,34 @@ class BrowserViewModel: ObservableObject {
 	
 	private func setupWebView(_ webView: WKWebView, for tab: Tab, profile: Profile?) {
 		let profileId = profile?.id ?? UUID()
+		
+		// Create navigation delegate
 		let navigationDelegate = WebViewNavigationDelegate(
 			tab: tab,
 			onTitleUpdate: { [weak self] title in
-				self?.updateTabTitle(tab, title: title)
+				guard let self = self else { return }
+				Task { @MainActor in
+					if let title = title {
+						tab.title = title
+						self.saveChanges()
+					}
+				}
 			},
 			onUrlUpdate: { [weak self] url in
-				self?.updateUrl(url)
+				guard let self = self else { return }
+				Task { @MainActor in
+					self.urlInput = url
+				}
 			}
 		)
+		
 		webView.navigationDelegate = navigationDelegate
 		navigationDelegatesByProfile[profileId]?[tab.id] = navigationDelegate
 		
-		// Configure user agent
 		configureUserAgent(webView, for: profile)
 		
-		// Add notification observer for user agent changes
-		NotificationCenter.default.addObserver(
+		// Set up user agent refresh observer
+		let observer = NotificationCenter.default.addObserver(
 			forName: NSNotification.Name("RefreshWebViews"),
 			object: nil,
 			queue: .main
@@ -633,12 +654,14 @@ class BrowserViewModel: ObservableObject {
 				return
 			}
 			
-			// Update user agent for this WebView
-			self.configureUserAgent(webView, for: profile)
-			
-			// Reload the page to apply new user agent
-			webView.reload()
+			Task { @MainActor in
+				self.configureUserAgent(webView, for: profile)
+				webView.reload()
+			}
 		}
+		
+		// Store observer in our dictionary using tab's ID
+		webViewObservers[tab.id] = observer
 	}
 	
 	private func updateUrl(_ url: String) {
@@ -677,43 +700,122 @@ class BrowserViewModel: ObservableObject {
 		}
 	}
 	
-	func getCurrentWorkspace(for windowId: UUID) -> Workspace? {
+	func setUrlInput(_ input: String) {
+		DispatchQueue.main.async {
+			self.urlInput = input
+		}
+	}
+	
+	func getCurrentWorkspace(for windowId: UUID) async -> Workspace? {
 		if let workspaceId = workspaceSelectionsByWindow[windowId] {
 			return workspaces.first(where: { $0.id == workspaceId })
 		}
 		return workspaces.first
 	}
 	
-	func setCurrentWorkspace(_ workspace: Workspace?, for windowId: UUID) {
-		workspaceSelectionsByWindow[windowId] = workspace?.id
+	func switchToProfile(_ newProfile: Profile?) async {
+		guard newProfile?.id != currentProfile?.id else { return }
 		
-		DispatchQueue.main.async {
-			if let workspace = workspace {
-				// Switch profile if needed
-				if workspace.profile?.id != self.currentProfile?.id {
-					self.switchToProfile(workspace.profile)
+		// Store old profile reference before clearing
+		let oldProfile = currentProfile
+		
+		await MainActor.run {
+			// Clear UI state first
+			currentTab = nil
+			normalTabs = []
+			bookmarkTabs = []
+			pinnedTabs = []
+			urlInput = ""
+		}
+		
+		// Handle old profile cleanup
+		if let oldProfile = oldProfile {
+			// First, stop all loading and clear WebViews
+			await cleanupProfileWebViews(oldProfile)
+			// Then clean up session data
+			await SessionManager.shared.cleanupProfile(oldProfile)
+		}
+		
+		// Wait a brief moment to ensure cleanup is complete
+		try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+		
+		await MainActor.run {
+			// Update current profile
+			currentProfile = newProfile
+			
+			// Initialize new profile state
+			if let newProfile = newProfile {
+				updatePinnedTabsForProfile(newProfile)
+				// Recreate WebViews for the new profile
+				Task {
+					await recreateWebViewsForProfile(newProfile)
 				}
-				
-				// Update workspace-specific tabs
-				self.bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
-				self.normalTabs = workspace.tabs.filter { $0.type == .normal }
-				
-				// Update current tab selection
-				if self.getSelectedTab(for: windowId) == nil && !self.normalTabs.isEmpty {
-					self.selectTab(self.normalTabs.first, for: windowId)
+			}
+		}
+	}
+	
+	private func cleanupProfileWebViews(_ profile: Profile) async {
+		let profileId = profile.id
+		
+		await MainActor.run {
+			// First nullify all navigation delegates to prevent callbacks
+			navigationDelegatesByProfile[profileId]?.forEach { tabId, delegate in
+				if let observer = webViewObservers[tabId] {
+					NotificationCenter.default.removeObserver(observer)
+					webViewObservers.removeValue(forKey: tabId)
 				}
-			} else {
-				self.bookmarkTabs = []
-				self.normalTabs = []
-				self.selectTab(nil, for: windowId)
 			}
 			
-			self.currentWorkspace = workspace
+			// Stop all WebViews and clear their content
+			webViewsByProfile[profileId]?.forEach { _, webView in
+				webView.stopLoading()
+				webView.loadHTMLString("", baseURL: nil)
+				webView.navigationDelegate = nil
+			}
+			
+			// Clear collections
+			webViewsByProfile.removeValue(forKey: profileId)
+			navigationDelegatesByProfile.removeValue(forKey: profileId)
 		}
+	}
+	
+	@MainActor
+	func setCurrentWorkspace(_ workspace: Workspace?, for windowId: UUID) async {
+		workspaceSelectionsByWindow[windowId] = workspace?.id
+		
+		if let workspace = workspace {
+			// Update workspace-specific tabs
+			bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
+			normalTabs = workspace.tabs.filter { $0.type == .normal }
+			
+			// Update current tab selection
+			if getSelectedTab(for: windowId) == nil && !normalTabs.isEmpty {
+				selectTab(normalTabs.first, for: windowId)
+			}
+			
+			// Switch profile if needed
+			if workspace.profile?.id != currentProfile?.id {
+				await switchToProfile(workspace.profile)
+			}
+		} else {
+			bookmarkTabs = []
+			normalTabs = []
+			selectTab(nil, for: windowId)
+		}
+		
+		// Update currentWorkspace last
+		currentWorkspace = workspace
 	}
 	
 	private func cleanupWebView(for tab: Tab) {
 		let profileId = tab.workspace?.profile?.id ?? UUID()
+		
+		// Remove the observer if it exists
+		if let observer = webViewObservers.removeValue(forKey: tab.id) {
+			NotificationCenter.default.removeObserver(observer)
+		}
+		
+		// Clean up the WebView
 		if let webView = webViewsByProfile[profileId]?[tab.id] {
 			webView.stopLoading()
 			webView.loadHTMLString("", baseURL: nil)
@@ -757,6 +859,65 @@ class BrowserViewModel: ObservableObject {
 			webView.customUserAgent = profile.userAgent
 		} else {
 			webView.customUserAgent = UserAgent.safari.rawValue
+		}
+	}
+	
+	private func createWebView(for tab: Tab) -> WKWebView {
+		let profile = tab.workspace?.profile
+		let profileId = profile?.id ?? UUID()
+		let configuration = SessionManager.shared.getConfiguration(for: profile)
+		let webView = WKWebView(frame: .zero, configuration: configuration)
+		
+		if webViewsByProfile[profileId] == nil {
+			webViewsByProfile[profileId] = [:]
+		}
+		webViewsByProfile[profileId]?[tab.id] = webView
+		
+		setupWebView(webView, for: tab, profile: profile)
+		
+		if let url = URL(string: tab.url), url.scheme != nil {
+			webView.load(URLRequest(url: url))
+		} else {
+			webView.load(URLRequest(url: URL(string: "about:blank")!))
+		}
+		
+		return webView
+	}
+	
+	func recreateWebViews(for profile: Profile) {
+		let profileId = profile.id
+		
+		// Clean up existing WebViews
+		webViewsByProfile[profileId]?.forEach { _, webView in
+			webView.stopLoading()
+			webView.loadHTMLString("", baseURL: nil)
+		}
+		
+		// Clear existing collections
+		webViewsByProfile[profileId] = [:]
+		navigationDelegatesByProfile[profileId] = [:]
+		
+		// Recreate WebViews for all tabs
+		let allTabs = profile.pinnedTabs + (profile.workspaces.flatMap { $0.tabs })
+		for tab in allTabs {
+			ensureWebView(for: tab)
+		}
+	}
+	
+	func switchProfile(_ newProfile: Profile?) {
+		if newProfile?.id != currentProfile?.id {
+			// Clean up old profile's WebViews
+			if let oldProfile = currentProfile {
+				webViewsByProfile[oldProfile.id]?.removeAll()
+				navigationDelegatesByProfile[oldProfile.id]?.removeAll()
+			}
+			
+			currentProfile = newProfile
+			
+			// Set up new profile's WebViews
+			if let newProfile = newProfile {
+				recreateWebViews(for: newProfile)
+			}
 		}
 	}
 }

@@ -11,36 +11,49 @@ import SwiftData
 import Foundation
 
 enum AppMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] {
-        [SchemaV1.self, SchemaV2.self]
-    }
-    
-    static var stages: [MigrationStage] {
-        [migrateV1toV2]
-    }
-    
-    static let migrateV1toV2 = MigrationStage.custom(
-        fromVersion: SchemaV1.self,
-        toVersion: SchemaV2.self,
-        willMigrate: { context in
-            // Migrate Workspaces
-            if let workspaces = try? context.fetch(FetchDescriptor<SchemaV1.WorkspaceV1>()) {
-                for workspace in workspaces {
-                    let colorTheme = ColorTheme(rawValue: workspace.color) ?? .blue
-                    workspace.colorTheme = colorTheme
-                }
-            }
-            
-            // Migrate Profiles
-            if let profiles = try? context.fetch(FetchDescriptor<SchemaV1.ProfileV1>()) {
-                for profile in profiles {
-                    profile.version = 2
-                }
-            }
-            
-            try? context.save()
-        }, didMigrate: nil
-    )
+	static var schemas: [any VersionedSchema.Type] {
+		[SchemaV1.self, SchemaV2.self]
+	}
+	
+	static var stages: [MigrationStage] {
+		[migrateV1toV2]
+	}
+	
+	static let migrateV1toV2 = MigrationStage.custom(
+		fromVersion: SchemaV1.self,
+		toVersion: SchemaV2.self,
+		willMigrate: { context in
+			// Migrate Workspaces
+			let workspaceRequest = FetchDescriptor<SchemaV1.WorkspaceV1>()
+			if let workspaces = try? context.fetch(workspaceRequest) {
+				for workspace in workspaces {
+					let colorTheme = ColorTheme(rawValue: workspace.color) ?? .blue
+					workspace.colorTheme = colorTheme
+				}
+			}
+			
+			// Migrate Profiles
+			let profileRequest = FetchDescriptor<SchemaV1.ProfileV1>()
+			if let profiles = try? context.fetch(profileRequest) {
+				for profile in profiles {
+					profile.version = 2
+				}
+			}
+			
+			try? context.save()
+		}, didMigrate: { context in
+			try? context.save()
+		}
+	)
+}
+
+// Helper extension to ensure thread-safe model operations
+extension NSPersistentStoreCoordinator {
+	func performAndWait<T>(_ block: () throws -> T) rethrows -> T {
+		return try performAndWait {
+			try block()
+		}
+	}
 }
 
 // Old schema version
