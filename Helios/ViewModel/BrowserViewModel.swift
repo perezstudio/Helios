@@ -719,36 +719,36 @@ import Combine
 		// Store old profile reference before clearing
 		let oldProfile = currentProfile
 		
-		await MainActor.run {
-			// Clear UI state first
-			currentTab = nil
-			normalTabs = []
-			bookmarkTabs = []
-			pinnedTabs = []
-			urlInput = ""
-		}
-		
-		// Handle old profile cleanup
-		if let oldProfile = oldProfile {
-			// First, stop all loading and clear WebViews
-			await cleanupProfileWebViews(oldProfile)
-			// Then clean up session data
-			await SessionManager.shared.cleanupProfile(oldProfile)
-		}
-		
-		// Wait a brief moment to ensure cleanup is complete
-		try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+		// Don't clear UI state immediately
+		let oldTabs = (normalTabs, bookmarkTabs, pinnedTabs)
 		
 		await MainActor.run {
-			// Update current profile
+			// Only clear UI state after we're sure the new profile is ready
 			currentProfile = newProfile
 			
 			// Initialize new profile state
 			if let newProfile = newProfile {
 				updatePinnedTabsForProfile(newProfile)
+				
 				// Recreate WebViews for the new profile
 				Task {
+					// First clean up old profile's WebViews
+					if let oldProfile = oldProfile {
+						await cleanupWebViewsForProfile(oldProfile)
+					}
+					
+					// Then create new ones
 					await recreateWebViewsForProfile(newProfile)
+					
+					// Finally, restore any state that should persist
+					await MainActor.run {
+						// Restore tabs if needed
+						if normalTabs.isEmpty && bookmarkTabs.isEmpty {
+							normalTabs = oldTabs.0
+							bookmarkTabs = oldTabs.1
+							pinnedTabs = oldTabs.2
+						}
+					}
 				}
 			}
 		}
@@ -781,30 +781,53 @@ import Combine
 	
 	@MainActor
 	func setCurrentWorkspace(_ workspace: Workspace?, for windowId: UUID) async {
+		// Store old workspace for comparison
+		let oldWorkspace = workspaceSelectionsByWindow[windowId].flatMap { id in
+			workspaces.first(where: { $0.id == id })
+		}
+		
+		// Update workspace selection
 		workspaceSelectionsByWindow[windowId] = workspace?.id
 		
 		if let workspace = workspace {
-			// Update workspace-specific tabs
-			bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
-			normalTabs = workspace.tabs.filter { $0.type == .normal }
-			
-			// Update current tab selection
-			if getSelectedTab(for: windowId) == nil && !normalTabs.isEmpty {
-				selectTab(normalTabs.first, for: windowId)
+			// Only update tab arrays if workspace changed
+			if workspace.id != oldWorkspace?.id {
+				// Preserve WebView states by checking existing tabs
+				let newBookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
+				let newNormalTabs = workspace.tabs.filter { $0.type == .normal }
+				
+				// Update arrays while preserving any existing WebView states
+				bookmarkTabs = newBookmarkTabs
+				normalTabs = newNormalTabs
+				
+				// Update current tab selection if needed
+				if getSelectedTab(for: windowId) == nil && !normalTabs.isEmpty {
+					selectTab(normalTabs.first, for: windowId)
+				}
 			}
 			
-			// Switch profile if needed
+			// Switch profile if needed, but only if it's actually different
 			if workspace.profile?.id != currentProfile?.id {
 				await switchToProfile(workspace.profile)
 			}
 		} else {
-			bookmarkTabs = []
-			normalTabs = []
-			selectTab(nil, for: windowId)
+			// Clear tabs only if we're actually removing the workspace
+			if oldWorkspace != nil {
+				bookmarkTabs = []
+				normalTabs = []
+				selectTab(nil, for: windowId)
+			}
 		}
 		
-		// Update currentWorkspace last
+		// Update currentWorkspace last to ensure all state is ready
 		currentWorkspace = workspace
+		
+		// Ensure all tabs have their WebViews
+		Task {
+			for tab in normalTabs + bookmarkTabs {
+				ensureWebView(for: tab)
+			}
+		}
 	}
 	
 	private func cleanupWebView(for tab: Tab) {
