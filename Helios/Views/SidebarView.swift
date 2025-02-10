@@ -37,13 +37,16 @@ struct SidebarView: View {
 				get: { viewModel.getSelectedTab(for: windowId) },
 				set: { viewModel.selectTab($0, for: windowId) }
 			)) {
-				Section(header: Text("Pinned Tabs")) {
-					ForEach(viewModel.pinnedTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
-					}
-				}
-				Section {
-					if let currentWorkspace = viewModel.currentWorkspace {
+				DraggableTabSection(
+					title: "Pinned Tabs",
+					tabs: viewModel.pinnedTabs,
+					tabType: .pinned,
+					windowId: windowId,
+					viewModel: viewModel
+				)
+				
+				if let currentWorkspace = viewModel.currentWorkspace {
+					Section {
 						HStack {
 							HStack {
 								Image(systemName: currentWorkspace.icon)
@@ -60,22 +63,29 @@ struct SidebarView: View {
 						}
 					}
 				}
-				Section(header: Text("Bookmark Tabs")) {
-					ForEach(viewModel.bookmarkTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
-					}
+				
+				DraggableTabSection(
+					title: "Bookmark Tabs",
+					tabs: viewModel.bookmarkTabs,
+					tabType: .bookmark,
+					windowId: windowId,
+					viewModel: viewModel
+				)
+				
+				DraggableTabSection(
+					title: "Normal Tabs",
+					tabs: viewModel.normalTabs,
+					tabType: .normal,
+					windowId: windowId,
+					viewModel: viewModel
+				)
+				
+				Button(action: {
+					showUrlBarSheet = true
+				}) {
+					Label("New Tab", systemImage: "plus")
 				}
-				Section(header: Text("Normal Tabs")) {
-					ForEach(viewModel.normalTabs, id: \.id) { tab in
-						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
-					}
-					Button(action: {
-						showUrlBarSheet = true
-					}) {
-						Label("New Tab", systemImage: "plus")
-					}
-					.keyboardShortcut("t", modifiers: [.command])
-				}
+				.keyboardShortcut("t", modifiers: [.command])
 			}
 			.listStyle(SidebarListStyle()) // Native macOS sidebar styling
 			
