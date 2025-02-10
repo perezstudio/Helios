@@ -16,23 +16,23 @@ struct HeliosApp: App {
 				HistoryEntry.self,
 				SearchEngine.self
 			])
-			
+
 			let modelConfiguration = ModelConfiguration(
+				"_",
 				schema: schema,
 				isStoredInMemoryOnly: false,
 				allowsSave: true
 			)
-			
-			// Create container with schema
+
+			// Create container with schema and configuration
 			container = try ModelContainer(
 				for: schema,
-				migrationPlan: AppMigrationPlan.self,
 				configurations: modelConfiguration
 			)
-			
+
 			// Initialize default search engines if needed
 			initializeDefaultSearchEngines()
-			
+
 		} catch {
 			print("Error initializing container: \(error)")
 			fatalError("Could not initialize ModelContainer: \(error)")
@@ -68,15 +68,6 @@ struct HeliosApp: App {
 				}
 				.keyboardShortcut("n", modifiers: [.command])
 				
-				Button("New Tab") {
-					if let focusedWindow = NSApp.keyWindow,
-					   let windowId = focusedWindow.identifier?.rawValue {
-						Task {
-							await browserViewModel.addNewTab()
-						}
-					}
-				}
-				.keyboardShortcut("t", modifiers: [.command])
 			}
 		}
 		

@@ -17,19 +17,20 @@ struct SidebarView: View {
 	@FocusState private var isUrlBarFocused: Bool
 	@State private var currentWorkspace: Workspace? = nil
 	@State private var selectedWorkspace: Workspace?
+	@State private var showUrlBarSheet: Bool = false
 	
 	var body: some View {
 		VStack {
+			
 			// URL Bar
-			TextField("Enter URL or search", text: $viewModel.urlInput, onCommit: {
-				Task {
-					await viewModel.handleUrlInput()
-				}
-			})
-			.textFieldStyle(.roundedBorder)
-			.padding(.horizontal)
-			.padding(.top)
-			.focused($isUrlBarFocused)
+			URLBarView(
+				viewModel: viewModel,
+				windowId: windowId,
+				currentTab: viewModel.getSelectedTab(for: windowId),
+				isSheet: false
+			)
+			.padding(.horizontal, 8)
+			.padding(.vertical, 4)
 			
 			// Tabs List
 			List(selection: Binding(
@@ -39,6 +40,24 @@ struct SidebarView: View {
 				Section(header: Text("Pinned Tabs")) {
 					ForEach(viewModel.pinnedTabs, id: \.id) { tab in
 						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
+					}
+				}
+				Section {
+					if let currentWorkspace = viewModel.currentWorkspace {
+						HStack {
+							HStack {
+								Image(systemName: currentWorkspace.icon)
+								Text(currentWorkspace.name)
+							}
+							Spacer()
+							Button(action: {
+								editingWorkspace = currentWorkspace
+								showWorkspaceSheet = true
+							}) {
+								Image(systemName: "pencil.circle")
+							}
+							.help("Edit Workspace")
+						}
 					}
 				}
 				Section(header: Text("Bookmark Tabs")) {
@@ -51,12 +70,11 @@ struct SidebarView: View {
 						TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
 					}
 					Button(action: {
-						Task {
-							await viewModel.addNewTab()
-						}
+						showUrlBarSheet = true
 					}) {
 						Label("New Tab", systemImage: "plus")
 					}
+					.keyboardShortcut("t", modifiers: [.command])
 				}
 			}
 			.listStyle(SidebarListStyle()) // Native macOS sidebar styling
@@ -65,15 +83,6 @@ struct SidebarView: View {
 			
 			// Workspace Picker and Add Workspace Button
 			HStack {
-				if let workspace = currentWorkspace {
-					Button(action: {
-						editingWorkspace = workspace
-						showWorkspaceSheet = true
-					}) {
-						Image(systemName: "pencil.circle")
-					}
-					.help("Edit Workspace")
-				}
 				
 				if viewModel.workspaces.count <= 6 {
 					Picker("", selection: $selectedWorkspace) {
@@ -144,6 +153,7 @@ struct SidebarView: View {
 						Image(systemName: "arrow.clockwise")
 					}
 					.help("Refresh")
+					.keyboardShortcut("r", modifiers: [.command])
 				}
 			}
 			.sheet(isPresented: $showWorkspaceSheet) {
@@ -151,6 +161,10 @@ struct SidebarView: View {
 					viewModel: viewModel, isPresented: $showWorkspaceSheet,
 					workspaceToEdit: editingWorkspace
 				)
+			}
+			.sheet(isPresented: $showUrlBarSheet) {
+				URLBarView(viewModel: viewModel, windowId: windowId, isSheet: true)
+					.presentationDetents([.height(140)])
 			}
 		}
 		.onChange(of: viewModel.urlBarFocused) { _, newValue in

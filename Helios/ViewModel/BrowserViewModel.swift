@@ -11,7 +11,8 @@ import WebKit
 import SwiftData
 import Combine
 
-@Observable class BrowserViewModel {
+@Observable
+class BrowserViewModel {
 	var modelContext: ModelContext?
 	var urlInput: String = ""
 	var currentURL: URL? = nil
@@ -85,35 +86,27 @@ import Combine
 	}
 	
 	private func cleanupWebViewsForProfile(_ profile: Profile) async {
-		await withTaskGroup(of: Void.self) { group in
-			let profileId = profile.id
-			
-			// Get all tab IDs for this profile's WebViews
-			if let webViews = webViewsByProfile[profileId] {
-				// Clean up observers for all tabs in the profile
-				for tabId in webViews.keys {
-					if let observer = webViewObservers.removeValue(forKey: tabId) {
-						NotificationCenter.default.removeObserver(observer)
-					}
-				}
-				
-				// Clean up WebViews
-				webViews.forEach { _, webView in
-					group.addTask {
-						await MainActor.run {
-							webView.stopLoading()
-							webView.loadHTMLString("", baseURL: nil)
-						}
-					}
+		let profileId = profile.id
+		
+		await MainActor.run {
+			// Nullify all navigation delegates
+			navigationDelegatesByProfile[profileId]?.forEach { tabId, delegate in
+				if let observer = webViewObservers[tabId] {
+					NotificationCenter.default.removeObserver(observer)
+					webViewObservers.removeValue(forKey: tabId)
 				}
 			}
 			
-			await group.waitForAll()
-			
-			await MainActor.run {
-				webViewsByProfile.removeValue(forKey: profileId)
-				navigationDelegatesByProfile.removeValue(forKey: profileId)
+			// Stop all WebViews and clear their content
+			webViewsByProfile[profileId]?.forEach { _, webView in
+				webView.stopLoading()
+				webView.loadHTMLString("", baseURL: nil)
+				webView.navigationDelegate = nil
 			}
+			
+			// Clear collections
+			webViewsByProfile.removeValue(forKey: profileId)
+			navigationDelegatesByProfile.removeValue(forKey: profileId)
 		}
 	}
 	
@@ -550,8 +543,12 @@ import Combine
 		let profile = tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
 		
-		guard webViewsByProfile[profileId]?[tab.id] == nil else { return }
+		// If WebView already exists with correct configuration, return
+		if let existingWebView = webViewsByProfile[profileId]?[tab.id] {
+			return
+		}
 		
+		// Get a fresh configuration from SessionManager
 		let configuration = SessionManager.shared.getConfiguration(for: profile)
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		
@@ -570,15 +567,26 @@ import Combine
 		// Load content
 		if let url = URL(string: tab.url), url.scheme != nil {
 			webView.load(URLRequest(url: url))
-		} else {
-			webView.loadHTMLString("", baseURL: nil)
 		}
 	}
 
 	func getWebView(for tab: Tab) -> WKWebView {
-		ensureWebView(for: tab)
-		let profileId = tab.workspace?.profile?.id ?? UUID()
-		return webViewsByProfile[profileId]?[tab.id] ?? createWebView(for: tab)
+		let profile = tab.workspace?.profile
+		let profileId = profile?.id ?? UUID()
+		
+		// Ensure we have storage for this profile
+		if webViewsByProfile[profileId] == nil {
+			webViewsByProfile[profileId] = [:]
+		}
+		
+		// Try to find existing WebView by webViewId
+		if let webViewId = tab.webViewId,
+		   let existingWebView = webViewsByProfile[profileId]?[webViewId] {
+			return existingWebView
+		}
+		
+		// If no WebView exists or webViewId is nil, create a new one
+		return createWebView(for: tab)
 	}
 
 	// MARK: - Persistence
@@ -636,8 +644,12 @@ import Combine
 		)
 		
 		webView.navigationDelegate = navigationDelegate
-		navigationDelegatesByProfile[profileId]?[tab.id] = navigationDelegate
 		
+		if let webViewId = tab.webViewId {
+			navigationDelegatesByProfile[profileId]?[webViewId] = navigationDelegate
+		}
+		
+		// Configure user agent based on profile
 		configureUserAgent(webView, for: profile)
 		
 		// Set up user agent refresh observer
@@ -660,7 +672,6 @@ import Combine
 			}
 		}
 		
-		// Store observer in our dictionary using tab's ID
 		webViewObservers[tab.id] = observer
 	}
 	
@@ -716,43 +727,50 @@ import Combine
 	func switchToProfile(_ newProfile: Profile?) async {
 		guard newProfile?.id != currentProfile?.id else { return }
 		
-		// Store old profile reference before clearing
 		let oldProfile = currentProfile
 		
-		// Don't clear UI state immediately
-		let oldTabs = (normalTabs, bookmarkTabs, pinnedTabs)
-		
 		await MainActor.run {
-			// Only clear UI state after we're sure the new profile is ready
+			// Update current profile
 			currentProfile = newProfile
 			
-			// Initialize new profile state
 			if let newProfile = newProfile {
 				updatePinnedTabsForProfile(newProfile)
 				
-				// Recreate WebViews for the new profile
+				// Only recreate WebViews if they don't exist
+				for tab in normalTabs + bookmarkTabs + pinnedTabs {
+					if tab.webViewId == nil ||
+					   webViewsByProfile[newProfile.id]?[tab.webViewId!] == nil {
+						_ = createWebView(for: tab)
+					}
+				}
+			}
+			
+			// Clean up old profile if needed
+			if let oldProfile = oldProfile {
 				Task {
-					// First clean up old profile's WebViews
-					if let oldProfile = oldProfile {
-						await cleanupWebViewsForProfile(oldProfile)
-					}
-					
-					// Then create new ones
-					await recreateWebViewsForProfile(newProfile)
-					
-					// Finally, restore any state that should persist
-					await MainActor.run {
-						// Restore tabs if needed
-						if normalTabs.isEmpty && bookmarkTabs.isEmpty {
-							normalTabs = oldTabs.0
-							bookmarkTabs = oldTabs.1
-							pinnedTabs = oldTabs.2
-						}
-					}
+					await cleanupUnusedWebViews(for: oldProfile)
 				}
 			}
 		}
 	}
+	
+	private func cleanupUnusedWebViews(for profile: Profile) async {
+			let profileId = profile.id
+			
+			// Get all active tab webViewIds for this profile
+			let activeWebViewIds = Set((profile.workspaces.flatMap { $0.tabs } + profile.pinnedTabs)
+				.compactMap { $0.webViewId })
+			
+			// Remove any WebViews that aren't associated with active tabs
+			webViewsByProfile[profileId]?.forEach { webViewId, webView in
+				if !activeWebViewIds.contains(webViewId) {
+					webView.stopLoading()
+					webView.loadHTMLString("", baseURL: nil)
+					webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
+					navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
+				}
+			}
+		}
 	
 	private func cleanupProfileWebViews(_ profile: Profile) async {
 		let profileId = profile.id
@@ -833,18 +851,24 @@ import Combine
 	private func cleanupWebView(for tab: Tab) {
 		let profileId = tab.workspace?.profile?.id ?? UUID()
 		
-		// Remove the observer if it exists
-		if let observer = webViewObservers.removeValue(forKey: tab.id) {
+		// Remove observer if it exists
+		if let observer = webViewObservers[tab.id] {
 			NotificationCenter.default.removeObserver(observer)
+			webViewObservers.removeValue(forKey: tab.id)
 		}
 		
 		// Clean up the WebView
-		if let webView = webViewsByProfile[profileId]?[tab.id] {
+		if let webViewId = tab.webViewId,
+		   let webView = webViewsByProfile[profileId]?[webViewId] {
 			webView.stopLoading()
 			webView.loadHTMLString("", baseURL: nil)
-			webViewsByProfile[profileId]?.removeValue(forKey: tab.id)
-			navigationDelegatesByProfile[profileId]?.removeValue(forKey: tab.id)
+			webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
+			navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
 		}
+		
+		// Clear the webViewId from the tab
+		tab.webViewId = nil
+		try? modelContext?.save()
 	}
 	
 	private func looksLikeUrl(_ input: String) -> Bool {
@@ -888,20 +912,27 @@ import Combine
 	private func createWebView(for tab: Tab) -> WKWebView {
 		let profile = tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
+		
+		// Generate new WebView ID if needed
+		if tab.webViewId == nil {
+			tab.webViewId = UUID()
+		}
+		
+		// Get configuration from SessionManager
 		let configuration = SessionManager.shared.getConfiguration(for: profile)
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		
-		if webViewsByProfile[profileId] == nil {
-			webViewsByProfile[profileId] = [:]
-		}
-		webViewsByProfile[profileId]?[tab.id] = webView
-		
+		// Set up WebView with profile
 		setupWebView(webView, for: tab, profile: profile)
 		
+		// Store WebView with its ID
+		if let webViewId = tab.webViewId {
+			webViewsByProfile[profileId]?[webViewId] = webView
+		}
+		
+		// Load content if needed
 		if let url = URL(string: tab.url), url.scheme != nil {
 			webView.load(URLRequest(url: url))
-		} else {
-			webView.load(URLRequest(url: URL(string: "about:blank")!))
 		}
 		
 		return webView

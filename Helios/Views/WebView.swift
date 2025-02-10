@@ -11,9 +11,12 @@ import WebKit
 
 struct WebView: NSViewRepresentable {
 	@Binding var url: URL?
+	var profile: Profile // Ensure profile is passed in
 
 	func makeNSView(context: Context) -> WKWebView {
-		let webView = WKWebView()
+		let configuration = WKWebViewConfiguration()
+		configuration.websiteDataStore = SessionManager.shared.getDataStore(for: profile) // Use profile's data store
+		let webView = WKWebView(frame: .zero, configuration: configuration)
 		webView.navigationDelegate = context.coordinator
 		return webView
 	}

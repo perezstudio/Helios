@@ -1,22 +1,14 @@
-//
-//  AppMigrationPlan.swift
-//  Helios
-//
-//  Created by Kevin Perez on 1/23/25.
-//
-
-
 import SwiftUI
 import SwiftData
 import Foundation
 
 enum AppMigrationPlan: SchemaMigrationPlan {
 	static var schemas: [any VersionedSchema.Type] {
-		[SchemaV1.self, SchemaV2.self]
+		[SchemaV1.self, SchemaV2.self, SchemaV3.self]
 	}
 	
 	static var stages: [MigrationStage] {
-		[migrateV1toV2]
+		[migrateV1toV2, migrateV2toV3]
 	}
 	
 	static let migrateV1toV2 = MigrationStage.custom(
@@ -37,6 +29,30 @@ enum AppMigrationPlan: SchemaMigrationPlan {
 			if let profiles = try? context.fetch(profileRequest) {
 				for profile in profiles {
 					profile.version = 2
+					// Ensure userAgent is set
+					if profile.userAgent == nil {
+						profile.userAgent = UserAgent.safari.rawValue
+					}
+				}
+			}
+			
+			try? context.save()
+		}, didMigrate: { context in
+			try? context.save()
+		}
+	)
+	
+	static let migrateV2toV3 = MigrationStage.custom(
+		fromVersion: SchemaV2.self,
+		toVersion: SchemaV3.self,
+		willMigrate: { context in
+			// Migrate tabs to include bookmarkedUrl
+			let tabRequest = FetchDescriptor<Tab>()
+			if let tabs = try? context.fetch(tabRequest) {
+				for tab in tabs {
+					if tab.type == .bookmark {
+						tab.bookmarkedUrl = tab.url
+					}
 				}
 			}
 			
@@ -47,70 +63,68 @@ enum AppMigrationPlan: SchemaMigrationPlan {
 	)
 }
 
-// Helper extension to ensure thread-safe model operations
-extension NSPersistentStoreCoordinator {
-	func performAndWait<T>(_ block: () throws -> T) rethrows -> T {
-		return try performAndWait {
-			try block()
+// Schema Versions
+enum SchemaV1: VersionedSchema {
+	static var versionIdentifier = Schema.Version(1, 0, 0)
+	
+	static var models: [any PersistentModel.Type] {
+		[WorkspaceV1.self, ProfileV1.self, Tab.self, HistoryEntry.self, SearchEngine.self]
+	}
+	
+	@Model
+	final class WorkspaceV1 {
+		@Attribute(.unique) var id: UUID
+		var name: String
+		var icon: String
+		var color: String
+		var colorTheme: ColorTheme = ColorTheme.blue
+		var tabs: [Tab] = []
+		var profile: ProfileV1?
+		
+		init(name: String, icon: String, color: String = "blue") {
+			self.id = UUID()
+			self.name = name
+			self.icon = icon
+			self.color = color
+		}
+	}
+	
+	@Model
+	final class ProfileV1 {
+		@Attribute(.unique) var id: UUID
+		var name: String
+		var pinnedTabs: [Tab]
+		var workspaces: [WorkspaceV1]
+		var history: [HistoryEntry]
+		@Relationship(deleteRule: .nullify) var defaultSearchEngine: SearchEngine?
+		var userAgent: String?
+		var version: Int
+		
+		init(name: String) {
+			self.id = UUID()
+			self.name = name
+			self.pinnedTabs = []
+			self.workspaces = []
+			self.history = []
+			self.defaultSearchEngine = nil
+			self.userAgent = UserAgent.safari.rawValue
+			self.version = 1
 		}
 	}
 }
 
-// Old schema version
-enum SchemaV1: VersionedSchema {
-    static var versionIdentifier = Schema.Version(1, 0, 0)
-    
-    static var models: [any PersistentModel.Type] {
-        [WorkspaceV1.self, ProfileV1.self]
-    }
-    
-    @Model
-    final class WorkspaceV1 {
-        @Attribute(.unique) var id: UUID
-        var name: String
-        var icon: String
-        var color: String
-        var colorTheme: ColorTheme = ColorTheme.blue  // Add this for migration
-        var tabs: [Tab] = []
-        var profile: Profile?
-        
-        init(name: String, icon: String, color: String = "blue") {
-            self.id = UUID()
-            self.name = name
-            self.icon = icon
-            self.color = color
-        }
-    }
-    
-    @Model
-    final class ProfileV1 {
-        @Attribute(.unique) var id: UUID
-        var name: String
-        var pinnedTabs: [Tab]
-        var workspaces: [Workspace]
-        var history: [HistoryEntry]
-        @Relationship(deleteRule: .nullify) var defaultSearchEngine: SearchEngine?
-        var userAgent: String?
-        var version: Int  // Add this for migration
-        
-        init(name: String) {
-            self.id = UUID()
-            self.name = name
-            self.pinnedTabs = []
-            self.workspaces = []
-            self.history = []
-            self.defaultSearchEngine = nil
-            self.userAgent = UserAgent.safari.rawValue
-            self.version = 1
-        }
-    }
+enum SchemaV2: VersionedSchema {
+	static var versionIdentifier = Schema.Version(2, 0, 0)
+	
+	static var models: [any PersistentModel.Type] {
+		[Workspace.self, Profile.self, Tab.self, HistoryEntry.self, SearchEngine.self]
+	}
 }
 
-// New schema version
-enum SchemaV2: VersionedSchema {
-    static var versionIdentifier = Schema.Version(2, 0, 0)
-    
-    static var models: [any PersistentModel.Type] {
-        [Workspace.self, Profile.self]
-    }
+enum SchemaV3: VersionedSchema {
+	static var versionIdentifier = Schema.Version(3, 0, 0)
+	
+	static var models: [any PersistentModel.Type] {
+		[Workspace.self, Profile.self, Tab.self, HistoryEntry.self, SearchEngine.self]
+	}
 }
