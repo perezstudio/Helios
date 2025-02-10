@@ -44,6 +44,7 @@ struct PinnedTabView: View {
 	let tab: Tab
 	let windowId: UUID
 	@Bindable var viewModel: BrowserViewModel
+	@State private var isHovered = false
 	
 	var body: some View {
 		HStack(spacing: 8) {
@@ -61,14 +62,22 @@ struct PinnedTabView: View {
 			
 			Spacer()
 			
-			Button(action: { viewModel.deleteTab(tab) }) {
-				Image(systemName: "xmark.circle.fill")
-					.font(.system(size: 12))
-					.foregroundStyle(.secondary)
+			if isHovered {
+				Button(action: { viewModel.deleteTab(tab) }) {
+					Image(systemName: "xmark.circle.fill")
+						.font(.system(size: 12))
+						.foregroundStyle(.secondary)
+				}
+				.buttonStyle(.plain)
+				.transition(.opacity)
 			}
-			.buttonStyle(.plain)
 		}
 		.padding(.vertical, 2)
+		.onHover { hovering in
+			withAnimation(.easeInOut(duration: 0.15)) {
+				isHovered = hovering
+			}
+		}
 	}
 }
 
@@ -76,6 +85,7 @@ struct BookmarkedTabView: View {
 	let tab: Tab
 	let windowId: UUID
 	@Bindable var viewModel: BrowserViewModel
+	@State private var isHovered = false
 	
 	var body: some View {
 		HStack(spacing: 8) {
@@ -98,13 +108,21 @@ struct BookmarkedTabView: View {
 			
 			Spacer()
 			
-			Button(action: { viewModel.deleteTab(tab) }) {
-				Image(systemName: "xmark.circle.fill")
-					.foregroundStyle(.secondary)
+			if isHovered {
+				Button(action: { viewModel.deleteTab(tab) }) {
+					Image(systemName: "xmark.circle.fill")
+						.foregroundStyle(.secondary)
+				}
+				.buttonStyle(.plain)
+				.transition(.opacity)
 			}
-			.buttonStyle(.plain)
 		}
 		.padding(.vertical, 2)
+		.onHover { hovering in
+			withAnimation(.easeInOut(duration: 0.15)) {
+				isHovered = hovering
+			}
+		}
 	}
 	
 	private func returnToBookmark() {
@@ -119,6 +137,7 @@ struct NormalTabView: View {
 	let tab: Tab
 	let windowId: UUID
 	@Bindable var viewModel: BrowserViewModel
+	@State private var isHovered = false
 	
 	var body: some View {
 		HStack(spacing: 8) {
@@ -129,13 +148,21 @@ struct NormalTabView: View {
 			
 			Spacer()
 			
-			Button(action: { viewModel.deleteTab(tab) }) {
-				Image(systemName: "xmark.circle.fill")
-					.foregroundStyle(.secondary)
+			if isHovered {
+				Button(action: { viewModel.deleteTab(tab) }) {
+					Image(systemName: "xmark.circle.fill")
+						.foregroundStyle(.secondary)
+				}
+				.buttonStyle(.plain)
+				.transition(.opacity)
 			}
-			.buttonStyle(.plain)
 		}
 		.padding(.vertical, 2)
+		.onHover { hovering in
+			withAnimation(.easeInOut(duration: 0.15)) {
+				isHovered = hovering
+			}
+		}
 	}
 }
 
