@@ -18,6 +18,7 @@ struct SidebarView: View {
 	@State private var currentWorkspace: Workspace? = nil
 	@State private var selectedWorkspace: Workspace?
 	@State private var showUrlBarSheet: Bool = false
+	@Binding var columnVisibility: NavigationSplitViewVisibility
 	
 	var body: some View {
 		VStack {
@@ -29,7 +30,6 @@ struct SidebarView: View {
 				currentTab: viewModel.getSelectedTab(for: windowId),
 				isSheet: false
 			)
-			.padding(.horizontal, 8)
 			.padding(.vertical, 4)
 			
 			// Tabs List
@@ -60,6 +60,8 @@ struct SidebarView: View {
 								Image(systemName: "pencil.circle")
 							}
 							.help("Edit Workspace")
+							.buttonStyle(TabButtonStyle(alignment: .center, expandWidth: false))
+
 						}
 					}
 				}
@@ -86,6 +88,7 @@ struct SidebarView: View {
 					Label("New Tab", systemImage: "plus")
 				}
 				.keyboardShortcut("t", modifiers: [.command])
+				.buttonStyle(TabButtonStyle())
 			}
 			.listStyle(SidebarListStyle()) // Native macOS sidebar styling
 			
@@ -93,35 +96,24 @@ struct SidebarView: View {
 			
 			// Workspace Picker and Add Workspace Button
 			HStack {
-				
-				if viewModel.workspaces.count <= 6 {
-					Picker("", selection: $selectedWorkspace) {
-						ForEach(viewModel.workspaces, id: \.id) { workspace in
-							Label(workspace.name, systemImage: workspace.icon)
-								.tag(Optional(workspace))
-								.labelStyle(.iconOnly)
+				SegmentedTabBar(
+					selection: Binding(
+						get: { selectedWorkspace ?? viewModel.workspaces.first ?? viewModel.currentWorkspace },
+						set: { workspace in
+							selectedWorkspace = workspace
+							Task {
+								await viewModel.setCurrentWorkspace(workspace, for: windowId)
+							}
 						}
+					),
+					tabs: viewModel.workspaces.map { workspace in
+						TabItem(
+							workspace.name,
+							icon: workspace.icon,
+							tag: workspace
+						)
 					}
-					.pickerStyle(.segmented)
-					.onChange(of: selectedWorkspace) { newWorkspace in
-						Task {
-							await viewModel.setCurrentWorkspace(newWorkspace, for: windowId)
-						}
-					}
-				} else {
-					Picker("", selection: $selectedWorkspace) {
-						ForEach(viewModel.workspaces, id: \.id) { workspace in
-							Label(workspace.name, systemImage: workspace.icon)
-								.tag(Optional(workspace))
-						}
-					}
-					.pickerStyle(.menu)
-					.onChange(of: selectedWorkspace) { newWorkspace in
-						Task {
-							await viewModel.setCurrentWorkspace(newWorkspace, for: windowId)
-						}
-					}
-				}
+				)
 				
 				Button(action: {
 					editingWorkspace = nil
@@ -130,8 +122,9 @@ struct SidebarView: View {
 					Image(systemName: "plus.circle")
 				}
 				.help("Add Workspace")
+				.buttonStyle(TabButtonStyle(alignment: .leading, expandWidth: false))
 			}
-			.padding(.horizontal, 4)
+			.padding(.horizontal, 8)
 			.padding(.vertical, 4)
 			.padding(.bottom, 4)
 			.onAppear {
@@ -141,7 +134,7 @@ struct SidebarView: View {
 				}
 			}
 			.toolbar {
-				ToolbarItemGroup(placement: .primaryAction) {
+				ToolbarItemGroup(placement: columnVisibility == .detailOnly ? .navigation : .primaryAction) {
 					Spacer()
 					Button(action: {
 						viewModel.goBack()
@@ -160,7 +153,13 @@ struct SidebarView: View {
 					Button(action: {
 						viewModel.refresh()
 					}) {
-						Image(systemName: "arrow.clockwise")
+						if let currentTab = viewModel.getSelectedTab(for: windowId),
+						   viewModel.isTabLoading(currentTab) {
+							Image(systemName: "xmark")
+								.imageScale(.medium)
+						} else {
+							Image(systemName: "arrow.clockwise")
+						}
 					}
 					.help("Refresh")
 					.keyboardShortcut("r", modifiers: [.command])

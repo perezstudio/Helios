@@ -13,23 +13,25 @@ struct ContentView: View {
 	@Environment(\.modelContext) var modelContext
 	@Bindable var viewModel: BrowserViewModel
 	@State private var windowId = WindowIdentifier()
+	@State private var pageSettingsInspector: Bool = false
+	@State private var columnVisibility = NavigationSplitViewVisibility.all
 	
 	var body: some View {
-		NavigationSplitView {
-			SidebarView(windowId: windowId.id, viewModel: viewModel)
+		NavigationSplitView(columnVisibility: $columnVisibility) {
+			SidebarView(windowId: windowId.id, viewModel: viewModel, columnVisibility: $columnVisibility)
 		} detail: {
-			if let currentTab = viewModel.getSelectedTab(for: windowId.id) {
-				WebViewContainer(webView: viewModel.getWebView(for: currentTab))
-					.id(currentTab.id)
-					.transition(.opacity)
-			} else {
-				ContentUnavailableView(
-					"No Tab Selected",
-					systemImage: "magnifyingglass",
-					description: Text("Please enter a URL or perform a search.")
-				)
-				.transition(.opacity)
-			}
+			DetailView(viewModel: viewModel, windowId: windowId.id, pageSettingsInspector: $pageSettingsInspector)
+				.toolbar {
+					ToolbarItem(placement: .navigation) {
+						HStack {
+							if let currentTab = viewModel.currentTab {
+								FaviconView(tab: currentTab, size: 16)
+							}
+						}
+					}
+				}
+				.navigationTitle(viewModel.currentTab?.title ?? "Helios Browser")
+				.navigationSubtitle(viewModel.currentWorkspace?.name ?? "No Workspace Selected")
 		}
 		.onAppear {
 			viewModel.setModelContext(modelContext)
@@ -39,6 +41,19 @@ struct ContentView: View {
 			WindowManager.shared.unregisterWindow(windowId.id)
 		}
 		.focusedSceneValue(\.windowId, windowId.id)
+		.inspector(isPresented: $pageSettingsInspector) {
+			if let currentTab = viewModel.getSelectedTab(for: windowId.id),
+			   let url = URL(string: currentTab.url) {
+				PageSettingsView(
+					url: url,
+					profile: viewModel.currentWorkspace?.profile,
+					settings: viewModel.getPageSettings(for: currentTab) ?? SiteSettings(hostPattern: url.host ?? "")
+				)
+			} else {
+				Text("No tab selected")
+			}
+		}
+		
 	}
 }
 

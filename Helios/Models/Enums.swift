@@ -72,3 +72,20 @@ enum UserAgent: String, CaseIterable, Codable {
 		.safari
 	}
 }
+
+
+enum PermissionState: String, Codable, CaseIterable {
+	case ask = "Ask"
+	case allow = "Allow"
+	case block = "Block"
+	
+	var description: String {
+		rawValue
+	}
+}
+
+enum SoundState: String, Codable, CaseIterable {
+	case automatic = "Automatic"
+	case allow = "Allow"
+	case mute = "Mute"
+}

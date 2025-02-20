@@ -12,17 +12,22 @@ import SwiftData
 final class Profile {
 	@Attribute(.unique) var id: UUID
 	var name: String
-	var pinnedTabs: [Tab]
 	var workspaces: [Workspace]
 	var history: [HistoryEntry]
 	@Relationship(deleteRule: .nullify) var defaultSearchEngine: SearchEngine?
 	var userAgent: String?  // Make this optional
 	var version: Int  // Add version tracking
+	@Relationship(deleteRule: .cascade) var siteSettings: [SiteSettings] = []
+	
+	var pinnedTabs: [Tab] {
+		workspaces.flatMap { workspace in
+			workspace.tabs.filter { $0.type == .pinned }
+		}
+	}
 	
 	init(name: String) {
 		self.id = UUID()
 		self.name = name
-		self.pinnedTabs = []
 		self.workspaces = []
 		self.history = []
 		self.defaultSearchEngine = nil

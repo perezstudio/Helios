@@ -20,6 +20,10 @@ class Tab {
 	var webViewId: UUID?
 	var bookmarkedUrl: String?
 	
+	var profile: Profile? {
+		workspace?.profile
+	}
+	
 	init(title: String, url: String, type: TabType, workspace: Workspace? = nil) {
 		self.id = UUID()
 		self.title = title

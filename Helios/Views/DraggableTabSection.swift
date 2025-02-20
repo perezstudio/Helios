@@ -63,8 +63,10 @@ struct DraggableTabSection: View {
 						.cornerRadius(4)
 					}
 			}
-			.onMove { from, to in
-				moveTab(from: from, to: to)
+			.onMove { source, destination in
+				if let workspace = viewModel.currentWorkspace {
+					viewModel.reorderPinnedTabs(in: workspace, from: source, to: destination)
+				}
 			}
 		}
 		.dropDestination(for: DraggableTabItem.self) { items, location in
@@ -75,33 +77,11 @@ struct DraggableTabSection: View {
 		}
 	}
 	
-	private func moveTab(from source: IndexSet, to destination: Int) {
-		switch tabType {
-		case .normal:
-			guard let sourceIdx = source.first else { return }
-			var tabs = viewModel.normalTabs
-			tabs.move(fromOffsets: source, toOffset: destination)
-			viewModel.normalTabs = tabs
-			
-		case .bookmark:
-			guard let sourceIdx = source.first else { return }
-			var tabs = viewModel.bookmarkTabs
-			tabs.move(fromOffsets: source, toOffset: destination)
-			viewModel.bookmarkTabs = tabs
-			
-		case .pinned:
-			guard let sourceIdx = source.first else { return }
-			var tabs = viewModel.pinnedTabs
-			tabs.move(fromOffsets: source, toOffset: destination)
-			viewModel.pinnedTabs = tabs
-		}
-		
-		viewModel.saveChanges()
-	}
-	
 	private func findTab(for item: DraggableTabItem) -> Tab? {
-		let allTabs = viewModel.normalTabs + viewModel.bookmarkTabs + viewModel.pinnedTabs
-		return allTabs.first { $0.id == item.codableTab.id }
+		if let workspace = viewModel.currentWorkspace {
+			return workspace.tabs.first { $0.id == item.codableTab.id }
+		}
+		return nil
 	}
 	
 	private func handleDrop(of item: DraggableTabItem) -> Bool {

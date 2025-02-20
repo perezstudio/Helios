@@ -22,46 +22,43 @@ class SessionManager {
 		}
 	}
 	
-	func getDataStore(for profile: Profile?) -> WKWebsiteDataStore {
-		queue.sync {
-			guard let profile = profile else {
-				return WKWebsiteDataStore.default() // Use default if profile is nil
-			}
-			
-			if let existingDataStore = dataStoresByProfile[profile.id] {
-				return existingDataStore
-			}
-
-			let newDataStore = WebKitDirectoryHelper.setupCustomDataStore(for: profile)
-			dataStoresByProfile[profile.id] = newDataStore
-			return newDataStore
-		}
-	}
-	
 	private func getProfileConfiguration(for profile: Profile) -> WKWebViewConfiguration {
-		// Always create a new configuration for the profile
+		// Use existing configuration if available
+		if let existingConfig = configurationsByProfile[profile.id] {
+			return existingConfig
+		}
+		
+		// Create new configuration
 		let config = WKWebViewConfiguration()
 		
-		// Get or create process pool for profile (this helps maintain cookies and session data)
-		let processPool = processPoolsByProfile[profile.id] ?? {
-			let pool = WKProcessPool()
-			processPoolsByProfile[profile.id] = pool
-			return pool
-		}()
+		// Configure process pool
+		let processPool = processPoolsByProfile[profile.id] ?? WKProcessPool()
+		processPoolsByProfile[profile.id] = processPool
 		config.processPool = processPool
-		
-		// Get or create data store
-		let dataStore = getOrCreateDataStore(for: profile)
-		config.websiteDataStore = dataStore
 		
 		// Configure preferences
 		let prefs = WKPreferences()
 		prefs.javaScriptCanOpenWindowsAutomatically = true
 		config.preferences = prefs
 		
-		// Cache configuration
-		configurationsByProfile[profile.id] = config
+		// Configure website data store
+		let dataStore = getOrCreateDataStore(for: profile)
+		config.websiteDataStore = dataStore
 		
+		// Configure media capabilities
+		if #available(macOS 14.0, *) {
+			config.mediaTypesRequiringUserActionForPlayback = []
+		} else {
+			config.mediaTypesRequiringUserActionForPlayback = .all
+		}
+		
+		// Configure web content
+		let webpagePrefs = WKWebpagePreferences()
+		webpagePrefs.allowsContentJavaScript = true
+		config.defaultWebpagePreferences = webpagePrefs
+		
+		// Store and return configuration
+		configurationsByProfile[profile.id] = config
 		return config
 	}
 	
@@ -74,7 +71,29 @@ class SessionManager {
 		prefs.javaScriptCanOpenWindowsAutomatically = true
 		config.preferences = prefs
 		
+		if #available(macOS 14.0, *) {
+			config.mediaTypesRequiringUserActionForPlayback = []
+		} else {
+			config.mediaTypesRequiringUserActionForPlayback = .all
+		}
+		
 		return config
+	}
+	
+	func getDataStore(for profile: Profile?) -> WKWebsiteDataStore {
+		queue.sync {
+			guard let profile = profile else {
+				return WKWebsiteDataStore.default()
+			}
+			
+			if let existingDataStore = dataStoresByProfile[profile.id] {
+				return existingDataStore
+			}
+
+			let newDataStore = WebKitDirectoryHelper.setupCustomDataStore(for: profile)
+			dataStoresByProfile[profile.id] = newDataStore
+			return newDataStore
+		}
 	}
 	
 	private func getOrCreateDataStore(for profile: Profile) -> WKWebsiteDataStore {

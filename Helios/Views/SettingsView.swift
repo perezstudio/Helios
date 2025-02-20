@@ -26,6 +26,10 @@ struct SettingsView: View {
 					.tabItem {
 						Label("Search", systemImage: "magnifyingglass")
 					}
+				WebsitesSettingsView()
+					.tabItem {
+						Label("Websites", systemImage: "globe")
+					}
 			}
 		}
 		.navigationTitle("Settings")

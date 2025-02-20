@@ -16,13 +16,22 @@ class BrowserViewModel {
 	var modelContext: ModelContext?
 	var urlInput: String = ""
 	var currentURL: URL? = nil
-	var pinnedTabs: [Tab] = []
+	var pinnedTabs: [Tab] {
+		// Get all pinned tabs from all workspaces in the current profile
+		guard let currentProfile = currentWorkspace?.profile else { return [] }
+		
+		// Flatten all tabs from all workspaces in the profile and filter for pinned ones
+		return currentProfile.workspaces.flatMap { workspace in
+			workspace.tabs.filter { $0.type == .pinned }
+		}
+	}
 	var bookmarkTabs: [Tab] = []
 	var normalTabs: [Tab] = []
 	var workspaces: [Workspace] = []
 	var urlBarFocused: Bool = false
 	private var currentProfile: Profile? = nil
 	private var webViewObservers: [UUID: NSObjectProtocol] = [:]
+	private var loadingTabs: Set<UUID> = []
 	
 	private var tabSelectionsByWindow: [UUID: UUID] = [:]
 	private var workspaceSelectionsByWindow: [UUID: UUID] = [:]
@@ -42,47 +51,55 @@ class BrowserViewModel {
 	
 	func togglePin(_ tab: Tab) {
 		guard let context = modelContext,
-			  let profile = currentWorkspace?.profile else { return }
+			  let currentWorkspace = currentWorkspace else { return }
 		
 		Task { @MainActor in
 			if tab.type == .pinned {
-				profile.pinnedTabs.removeAll { $0.id == tab.id }
-				
-				let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: currentWorkspace)
-				newTab.faviconData = tab.faviconData
-				context.insert(newTab)
-				currentWorkspace?.tabs.append(newTab)
-				
-				pinnedTabs.removeAll { $0.id == tab.id }
-				normalTabs.append(newTab)
-				context.delete(tab)
-				
+				// Remove from arrays first
+				if let workspace = tab.workspace {
+					// Update type
+					tab.type = .normal
+					// Add to normal tabs if it's in current workspace
+					if workspace.id == currentWorkspace.id {
+						normalTabs.append(tab)
+					}
+				}
 			} else {
-				let wasNormal = tab.type == .normal
-				let wasBookmark = tab.type == .bookmark
+				// Handle pinning
+				let oldType = tab.type // Store the old type before changing it
 				
-				let pinnedTab = Tab(title: tab.title, url: tab.url, type: .pinned)
-				pinnedTab.faviconData = tab.faviconData
-				context.insert(pinnedTab)
-				profile.pinnedTabs.append(pinnedTab)
-				
-				if wasNormal {
+				// Remove from appropriate array first
+				if oldType == .normal {
 					normalTabs.removeAll { $0.id == tab.id }
-				} else if wasBookmark {
+				} else if oldType == .bookmark {
 					bookmarkTabs.removeAll { $0.id == tab.id }
 				}
 				
-				if let workspace = tab.workspace {
-					workspace.tabs.removeAll { $0.id == tab.id }
-				}
-				
-				pinnedTabs.append(pinnedTab)
-				context.delete(tab)
-				ensureWebView(for: pinnedTab)
+				// Then change type
+				tab.type = .pinned
 			}
+			
+			// Force UI update
+			normalTabs = Array(normalTabs)
+			bookmarkTabs = Array(bookmarkTabs)
+			
+			// Ensure the WebView exists and is attached to correct profile
+			ensureWebView(for: tab)
 			
 			saveChanges()
 		}
+	}
+	
+	func reorderPinnedTabs(in workspace: Workspace, from source: IndexSet, to destination: Int) {
+		let tabs = workspace.tabs.filter { $0.type == .pinned }
+		var reorderedTabs = tabs
+		reorderedTabs.move(fromOffsets: source, toOffset: destination)
+		
+		// Update the workspace's tabs while preserving non-pinned tabs
+		let nonPinnedTabs = workspace.tabs.filter { $0.type != .pinned }
+		workspace.tabs = reorderedTabs + nonPinnedTabs
+		
+		saveChanges()
 	}
 	
 	private func cleanupWebViewsForProfile(_ profile: Profile) async {
@@ -345,13 +362,13 @@ class BrowserViewModel {
 		guard let context = modelContext,
 			  let currentWorkspace = await getCurrentWorkspace(for: windowUUID) else { return }
 		
+		// Handle pinned tabs at profile level
 		if type == .pinned {
-			// Handle pinned tabs at profile level
 			addNewPinnedTab(title: title, url: url)
 			return
 		}
 		
-		// Create the new tab
+		// Create the new tab always in the current workspace, regardless of source
 		let newTab = Tab(title: title, url: url, type: type, workspace: currentWorkspace)
 		context.insert(newTab)
 		currentWorkspace.tabs.append(newTab)
@@ -375,26 +392,17 @@ class BrowserViewModel {
 	
 	func addNewPinnedTab(title: String = "New Tab", url: String = "about:blank") {
 		guard let context = modelContext,
-			  let profile = currentWorkspace?.profile else { return }
+			  let currentWorkspace = currentWorkspace else { return }
 		
-		// Create a single pinned tab associated with the profile
-		let newTab = Tab(title: title, url: url, type: .pinned)
+		// Create the pinned tab in the current workspace
+		let newTab = Tab(title: title, url: url, type: .pinned, workspace: currentWorkspace)
 		context.insert(newTab)
-		profile.pinnedTabs.append(newTab)
+		currentWorkspace.tabs.append(newTab)
 		
-		// Update pinned tabs view
-		updatePinnedTabsForProfile(profile)
+		// Ensure the WebView is created
+		ensureWebView(for: newTab)
+		
 		saveChanges()
-	}
-	
-	private func updatePinnedTabsForProfile(_ profile: Profile?) {
-		Task { @MainActor in
-			if let profile = profile {
-				self.pinnedTabs = profile.pinnedTabs
-			} else {
-				self.pinnedTabs = []
-			}
-		}
 	}
 	
 	func deleteTab(_ tab: Tab) {
@@ -404,37 +412,28 @@ class BrowserViewModel {
 			tabSelectionsByWindow[windowId] = nil
 		}
 		
-		if tab.type == .pinned {
-			// Handle pinned tab deletion across all workspaces in the profile
-			if let profile = tab.workspace?.profile {
-				for workspace in profile.workspaces {
-					workspace.tabs.removeAll { pinnedTab in
-						pinnedTab.type == .pinned && pinnedTab.url == tab.url
-					}
-				}
-				updatePinnedTabsForProfile(profile)
-			}
-		} else {
-			// Handle normal/bookmark tab deletion
-			if let workspace = tab.workspace {
-				workspace.tabs.removeAll { $0.id == tab.id }
-				
-				if tab.type == .normal {
-					normalTabs.removeAll { $0.id == tab.id }
-					
-					// Update current tab selection
-					for windowId in affectedWindows {
-						if !normalTabs.isEmpty {
-							if let index = normalTabs.firstIndex(where: { $0.id == tab.id }) {
-								selectTab(normalTabs[max(0, index - 1)], for: windowId)
-							}
-						} else {
-							selectTab(nil, for: windowId)
+		// Remove from workspace
+		if let workspace = tab.workspace {
+			workspace.tabs.removeAll { $0.id == tab.id }
+			
+			// Update our local arrays
+			switch tab.type {
+			case .normal:
+				normalTabs.removeAll { $0.id == tab.id }
+				// Update current tab selection
+				for windowId in affectedWindows {
+					if !normalTabs.isEmpty {
+						if let index = normalTabs.firstIndex(where: { $0.id == tab.id }) {
+							selectTab(normalTabs[max(0, index - 1)], for: windowId)
 						}
+					} else {
+						selectTab(nil, for: windowId)
 					}
-				} else {
-					bookmarkTabs.removeAll { $0.id == tab.id }
 				}
+			case .bookmark:
+				bookmarkTabs.removeAll { $0.id == tab.id }
+			case .pinned:
+				break // No need to handle separately as it's part of workspace.tabs
 			}
 		}
 		
@@ -503,7 +502,6 @@ class BrowserViewModel {
 			// Clear arrays
 			normalTabs = []
 			bookmarkTabs = []
-			pinnedTabs = []
 		}
 		
 		// Clean up all WebViews for tabs in this workspace
@@ -540,11 +538,17 @@ class BrowserViewModel {
 	// MARK: - WebView Management
 
 	private func ensureWebView(for tab: Tab) {
+		// For all tabs, use their workspace's profile
 		let profile = tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
 		
-		// If WebView already exists with correct configuration, return
+		// If WebView already exists with correct configuration, ensure it's loaded
 		if let existingWebView = webViewsByProfile[profileId]?[tab.id] {
+			if existingWebView.url == nil,
+			   let url = URL(string: tab.url),
+			   url.scheme != nil {
+				existingWebView.load(URLRequest(url: url))
+			}
 			return
 		}
 		
@@ -613,19 +617,31 @@ class BrowserViewModel {
 			if currentWorkspace == nil && !savedWorkspaces.isEmpty {
 				currentWorkspace = savedWorkspaces[0]
 				
-				// The didSet observer will handle loading the tabs
+				// Initialize current profile
+				currentProfile = currentWorkspace?.profile
+				
+				// Load pinned tabs if there's a profile
+				if let profile = currentProfile {
+					
+					// Ensure WebViews are created for pinned tabs
+					for tab in profile.pinnedTabs {
+						ensureWebView(for: tab)
+					}
+				}
 			}
 		} catch {
 			print("Failed to load saved data: \(error)")
 		}
 	}
 	
-	private func setupWebView(_ webView: WKWebView, for tab: Tab, profile: Profile?) {
+	private func setupWebView(_ webView: WKWebView, for tab: Tab, profile: Profile?, windowId: UUID = WindowManager.shared.activeWindow ?? UUID()) {
 		let profileId = profile?.id ?? UUID()
 		
 		// Create navigation delegate
 		let navigationDelegate = WebViewNavigationDelegate(
 			tab: tab,
+			windowId: windowId,
+			viewModel: self,
 			onTitleUpdate: { [weak self] title in
 				guard let self = self else { return }
 				Task { @MainActor in
@@ -643,7 +659,9 @@ class BrowserViewModel {
 			}
 		)
 		
+		// Set both delegates
 		webView.navigationDelegate = navigationDelegate
+		webView.uiDelegate = navigationDelegate
 		
 		if let webViewId = tab.webViewId {
 			navigationDelegatesByProfile[profileId]?[webViewId] = navigationDelegate
@@ -734,13 +752,14 @@ class BrowserViewModel {
 			currentProfile = newProfile
 			
 			if let newProfile = newProfile {
-				updatePinnedTabsForProfile(newProfile)
-				
-				// Only recreate WebViews if they don't exist
-				for tab in normalTabs + bookmarkTabs + pinnedTabs {
-					if tab.webViewId == nil ||
-					   webViewsByProfile[newProfile.id]?[tab.webViewId!] == nil {
-						_ = createWebView(for: tab)
+				// Ensure all tabs have WebViews
+				let allTabs = normalTabs + bookmarkTabs + pinnedTabs
+				for tab in allTabs {
+					ensureWebView(for: tab)
+					// Force reload tabs
+					if let url = URL(string: tab.url),
+					   url.scheme != nil {
+						getWebView(for: tab).load(URLRequest(url: url))
 					}
 				}
 			}
@@ -755,22 +774,22 @@ class BrowserViewModel {
 	}
 	
 	private func cleanupUnusedWebViews(for profile: Profile) async {
-			let profileId = profile.id
-			
-			// Get all active tab webViewIds for this profile
-			let activeWebViewIds = Set((profile.workspaces.flatMap { $0.tabs } + profile.pinnedTabs)
-				.compactMap { $0.webViewId })
-			
-			// Remove any WebViews that aren't associated with active tabs
-			webViewsByProfile[profileId]?.forEach { webViewId, webView in
-				if !activeWebViewIds.contains(webViewId) {
-					webView.stopLoading()
-					webView.loadHTMLString("", baseURL: nil)
-					webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
-					navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
-				}
+		let profileId = profile.id
+		
+		// Get all active tab webViewIds for this profile
+		let activeWebViewIds = Set((profile.workspaces.flatMap { $0.tabs } + profile.pinnedTabs)
+			.compactMap { $0.webViewId })
+		
+		// Remove any WebViews that aren't associated with active tabs
+		webViewsByProfile[profileId]?.forEach { webViewId, webView in
+			if !activeWebViewIds.contains(webViewId) {
+				webView.stopLoading()
+				webView.loadHTMLString("", baseURL: nil)
+				webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
+				navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
 			}
 		}
+	}
 	
 	private func cleanupProfileWebViews(_ profile: Profile) async {
 		let profileId = profile.id
@@ -910,7 +929,8 @@ class BrowserViewModel {
 	}
 	
 	private func createWebView(for tab: Tab) -> WKWebView {
-		let profile = tab.workspace?.profile
+		// For pinned tabs, use the current profile
+		let profile = tab.type == .pinned ? currentProfile : tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
 		
 		// Generate new WebView ID if needed
@@ -927,6 +947,9 @@ class BrowserViewModel {
 		
 		// Store WebView with its ID
 		if let webViewId = tab.webViewId {
+			if webViewsByProfile[profileId] == nil {
+				webViewsByProfile[profileId] = [:]
+			}
 			webViewsByProfile[profileId]?[webViewId] = webView
 		}
 		
@@ -952,7 +975,7 @@ class BrowserViewModel {
 		navigationDelegatesByProfile[profileId] = [:]
 		
 		// Recreate WebViews for all tabs
-		let allTabs = profile.pinnedTabs + (profile.workspaces.flatMap { $0.tabs })
+		let allTabs = profile.workspaces.flatMap { $0.tabs }
 		for tab in allTabs {
 			ensureWebView(for: tab)
 		}
@@ -973,6 +996,34 @@ class BrowserViewModel {
 				recreateWebViews(for: newProfile)
 			}
 		}
+	}
+	
+	func setTabLoading(_ tab: Tab, isLoading: Bool) {
+		if isLoading {
+			loadingTabs.insert(tab.id)
+		} else {
+			loadingTabs.remove(tab.id)
+		}
+	}
+
+	func isTabLoading(_ tab: Tab) -> Bool {
+		loadingTabs.contains(tab.id)
+	}
+	
+	func getPageSettings(for tab: Tab) -> SiteSettings? {
+		guard let url = URL(string: tab.url),
+			  let profile = currentWorkspace?.profile else { return nil }
+		
+		// Find existing site settings that match the URL
+		if let matchingSetting = profile.siteSettings.first(where: { $0.appliesTo(url: url) }) {
+			return matchingSetting
+		}
+		
+		// If no matching settings exist, create a new one
+		let newSettings = SiteSettings(hostPattern: url.host ?? "", profile: profile)
+		modelContext?.insert(newSettings)
+		
+		return newSettings
 	}
 }
 
