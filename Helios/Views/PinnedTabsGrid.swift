@@ -174,6 +174,7 @@ struct PinnedTabsGrid: View {
 	}
 }
 
+// In PinnedTabsGrid.swift, update the ReorderDropDelegate
 struct ReorderDropDelegate: DropDelegate {
 	let item: Tab
 	let items: [Tab]
@@ -208,22 +209,24 @@ struct ReorderDropDelegate: DropDelegate {
 			return false
 		}
 		
-		// Get all pinned tabs from workspace
-		var pinnedTabs = workspace.tabs.filter { $0.type == .pinned }
-		
 		// Only rearrange if the indices are different
 		if fromIndex != toIndex {
-			// Create a new array with the tabs in the new order
-			let tabToMove = pinnedTabs.remove(at: fromIndex)
-			pinnedTabs.insert(tabToMove, at: toIndex)
+			// Get the tabs sorted by display order
+			let pinnedTabs = workspace.tabs
+				.filter { $0.type == .pinned }
+				.sorted { $0.displayOrder < $1.displayOrder }
 			
-			// Get all non-pinned tabs
-			let nonPinnedTabs = workspace.tabs.filter { $0.type != .pinned }
+			// Create a mutable copy of the tabs array
+			var movedTabs = pinnedTabs.map { $0 } // Copy the array
 			
-			// Update the workspace's tabs array with the new order
-			workspace.tabs.removeAll()
-			workspace.tabs.append(contentsOf: pinnedTabs)
-			workspace.tabs.append(contentsOf: nonPinnedTabs)
+			// Perform the move operation
+			let movedTab = movedTabs.remove(at: fromIndex)
+			movedTabs.insert(movedTab, at: toIndex < fromIndex ? toIndex : toIndex)
+			
+			// Update all orders
+			for (index, tab) in movedTabs.enumerated() {
+				tab.displayOrder = index
+			}
 			
 			// Save changes
 			viewModel.saveChanges()

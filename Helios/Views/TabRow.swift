@@ -247,11 +247,27 @@ struct TabContextMenu: View {
 	}
 	
 	private func duplicateTab() {
-		guard let context = tab.workspace?.modelContext else { return }
-		let newTab = Tab(title: tab.title, url: tab.url, type: .normal, workspace: tab.workspace)
+		guard let context = tab.workspace?.modelContext,
+			  let workspace = tab.workspace else { return }
+			  
+		// Create new tab with proper display order
+		let maxOrder = workspace.tabs
+			.filter { $0.type == .normal }
+			.map { $0.displayOrder }
+			.max() ?? -1
+			
+		let newTab = Tab(
+			title: tab.title,
+			url: tab.url,
+			type: .normal,
+			workspace: workspace,
+			displayOrder: maxOrder + 1
+		)
+		
 		context.insert(newTab)
-		viewModel.normalTabs.append(newTab)
+		workspace.tabs.append(newTab)
 		viewModel.currentTab = newTab
+		viewModel.saveChanges()
 	}
 	
 	private func moveTab(to workspace: Workspace) {
@@ -262,30 +278,22 @@ struct TabContextMenu: View {
 		workspace.tabs.append(tab)
 		tab.workspace = workspace
 		
+		// Normalize the display orders in both workspaces
+		viewModel.normalizeDisplayOrders(in: workspace)
+		if let oldWorkspace = tab.workspace, oldWorkspace.id != workspace.id {
+			viewModel.normalizeDisplayOrders(in: oldWorkspace)
+		}
+		
 		if viewModel.currentTab?.id == tab.id {
 			viewModel.currentWorkspace = workspace
 		}
+		
+		viewModel.saveChanges()
 	}
 	
 	private func toggleBookmark() {
-		if tab.type == .bookmark {
-			// Remove bookmark
-			tab.type = .normal
-			tab.bookmarkedUrl = nil
-			if let index = viewModel.bookmarkTabs.firstIndex(where: { $0.id == tab.id }) {
-				viewModel.bookmarkTabs.remove(at: index)
-				viewModel.normalTabs.append(tab)
-			}
-		} else {
-			// Add bookmark
-			tab.type = .bookmark
-			tab.bookmarkedUrl = tab.url // Store current URL as bookmarked URL
-			if let index = viewModel.normalTabs.firstIndex(where: { $0.id == tab.id }) {
-				viewModel.normalTabs.remove(at: index)
-				viewModel.bookmarkTabs.append(tab)
-			}
-		}
-		viewModel.saveChanges()
+		// Use the viewModel's toggleBookmark method instead of directly modifying arrays
+		viewModel.toggleBookmark(tab)
 	}
 	
 	private func togglePin() {

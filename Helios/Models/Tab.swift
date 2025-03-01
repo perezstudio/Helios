@@ -20,11 +20,14 @@ class Tab {
 	var webViewId: UUID?
 	var bookmarkedUrl: String?
 	
+	// Add an explicit order field to maintain proper tab ordering
+	var displayOrder: Int = 0
+	
 	var profile: Profile? {
 		workspace?.profile
 	}
 	
-	init(title: String, url: String, type: TabType, workspace: Workspace? = nil) {
+	init(title: String, url: String, type: TabType, workspace: Workspace? = nil, displayOrder: Int = 0) {
 		self.id = UUID()
 		self.title = title
 		self.url = url
@@ -32,6 +35,7 @@ class Tab {
 		self.workspace = workspace
 		self.faviconData = nil
 		self.webViewId = UUID()
+		self.displayOrder = displayOrder
 		if type == .bookmark {
 			self.bookmarkedUrl = url
 		}
@@ -44,5 +48,3 @@ class Tab {
 		return url
 	}
 }
-
-

@@ -4,11 +4,11 @@ import Foundation
 
 enum AppMigrationPlan: SchemaMigrationPlan {
 	static var schemas: [any VersionedSchema.Type] {
-		[SchemaV1.self, SchemaV2.self, SchemaV3.self]
+		[SchemaV1.self, SchemaV2.self, SchemaV3.self, SchemaV4.self, SchemaV5.self]
 	}
 	
 	static var stages: [MigrationStage] {
-		[migrateV1toV2, migrateV2toV3]
+		[migrateV1toV2, migrateV2toV3, migrateV3toV4, migrateV4toV5]
 	}
 	
 	static let migrateV1toV2 = MigrationStage.custom(
@@ -101,6 +101,43 @@ enum AppMigrationPlan: SchemaMigrationPlan {
 			try? context.save()
 		}
 	)
+	
+	static let migrateV4toV5 = MigrationStage.custom(
+		fromVersion: SchemaV4.self,
+		toVersion: SchemaV5.self,
+		willMigrate: { context in
+			// Fetch all workspaces to access their tabs
+			let workspaceRequest = FetchDescriptor<Workspace>()
+			
+			guard let workspaces = try? context.fetch(workspaceRequest) else { return }
+			
+			// For each workspace, set displayOrder for its tabs
+			for workspace in workspaces {
+				// Group tabs by type
+				let pinnedTabs = workspace.tabs.filter { $0.type == .pinned }
+				let bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
+				let normalTabs = workspace.tabs.filter { $0.type == .normal }
+				
+				// Set display order for each group to match their current order
+				for (index, tab) in pinnedTabs.enumerated() {
+					tab.displayOrder = index
+				}
+				
+				for (index, tab) in bookmarkTabs.enumerated() {
+					tab.displayOrder = index
+				}
+				
+				for (index, tab) in normalTabs.enumerated() {
+					tab.displayOrder = index
+				}
+			}
+			
+			try? context.save()
+		},
+		didMigrate: { context in
+			try? context.save()
+		}
+	)
 }
 
 // Schema Versions
@@ -174,5 +211,44 @@ enum SchemaV4: VersionedSchema {
 	
 	static var models: [any PersistentModel.Type] {
 		[Workspace.self, Profile.self, Tab.self, HistoryEntry.self, SearchEngine.self]
+	}
+}
+
+enum SchemaV5: VersionedSchema {
+	static var versionIdentifier = Schema.Version(5, 0, 0)
+	
+	static var models: [any PersistentModel.Type] {
+		[Workspace.self, Profile.self, TabV5.self, HistoryEntry.self, SearchEngine.self, SiteSettings.self]
+	}
+	
+	@Model
+	class TabV5 {
+		var id: UUID = UUID()
+		var title: String
+		var url: String
+		var type: TabType
+		var workspace: Workspace?
+		var faviconData: Data?
+		var webViewId: UUID?
+		var bookmarkedUrl: String?
+		var displayOrder: Int = 0
+		
+		var profile: Profile? {
+			workspace?.profile
+		}
+		
+		init(title: String, url: String, type: TabType, workspace: Workspace? = nil, displayOrder: Int = 0) {
+			self.id = UUID()
+			self.title = title
+			self.url = url
+			self.type = type
+			self.workspace = workspace
+			self.faviconData = nil
+			self.webViewId = UUID()
+			self.displayOrder = displayOrder
+			if type == .bookmark {
+				self.bookmarkedUrl = url
+			}
+		}
 	}
 }

@@ -17,16 +17,23 @@ class BrowserViewModel {
 	var urlInput: String = ""
 	var currentURL: URL? = nil
 	var pinnedTabs: [Tab] {
-		// Get all pinned tabs from all workspaces in the current profile
-		guard let currentProfile = currentWorkspace?.profile else { return [] }
-		
-		// Flatten all tabs from all workspaces in the profile and filter for pinned ones
-		return currentProfile.workspaces.flatMap { workspace in
-			workspace.tabs.filter { $0.type == .pinned }
-		}
+		guard let currentWorkspace = currentWorkspace else { return [] }
+		return currentWorkspace.tabs
+			.filter { $0.type == .pinned }
+			.sorted { $0.displayOrder < $1.displayOrder }
 	}
-	var bookmarkTabs: [Tab] = []
-	var normalTabs: [Tab] = []
+	var bookmarkTabs: [Tab] {
+		guard let currentWorkspace = currentWorkspace else { return [] }
+		return currentWorkspace.tabs
+			.filter { $0.type == .bookmark }
+			.sorted { $0.displayOrder < $1.displayOrder }
+	}
+	var normalTabs: [Tab] {
+		guard let currentWorkspace = currentWorkspace else { return [] }
+		return currentWorkspace.tabs
+			.filter { $0.type == .normal }
+			.sorted { $0.displayOrder < $1.displayOrder }
+	}
 	var workspaces: [Workspace] = []
 	var urlBarFocused: Bool = false
 	private var currentProfile: Profile? = nil
@@ -54,6 +61,9 @@ class BrowserViewModel {
 	}
 	
 	private func insertTabAtPosition(_ tab: Tab, type: TabType, in workspace: Workspace) {
+		// Get the current index of the tab in the workspace
+		let currentIndex = workspace.tabs.firstIndex(where: { $0.id == tab.id })
+		
 		// First remove the tab from its current position
 		workspace.tabs.removeAll { $0.id == tab.id }
 		
@@ -69,8 +79,27 @@ class BrowserViewModel {
 				// No pinned tabs, insert at the beginning
 				workspace.tabs.insert(tab, at: 0)
 			}
+		} else if let currentIndex = currentIndex {
+			// For unpinning, try to maintain the tab's relative position
+			// Find the best position based on surrounding tabs
+			let unpinnedTabs = workspace.tabs.filter { $0.type != .pinned }
+			if unpinnedTabs.isEmpty {
+				// If there are no unpinned tabs, append to the end of all tabs
+				workspace.tabs.append(tab)
+			} else {
+				// Find the index of the tab that was after this one
+				let pinnedCount = workspace.tabs.filter { $0.type == .pinned }.count
+				
+				// If this was the last pinned tab, insert it at the beginning of unpinned tabs
+				if currentIndex == pinnedCount - 1 {
+					workspace.tabs.insert(tab, at: pinnedCount)
+				} else {
+					// Insert it at the end of unpinned tabs
+					workspace.tabs.append(tab)
+				}
+			}
 		} else {
-			// For non-pinned tabs, add to the end
+			// If we don't have a current index, just append to the end
 			workspace.tabs.append(tab)
 		}
 	}
@@ -78,29 +107,67 @@ class BrowserViewModel {
 	func togglePin(_ tab: Tab) {
 		guard let currentWorkspace = currentWorkspace else { return }
 		
-		Task { @MainActor in
-			if tab.type == .pinned {
-				// Unpinning - move to normal section
-				insertTabAtPosition(tab, type: .normal, in: currentWorkspace)
-				normalTabs.append(tab)
-			} else {
-				// Pinning - move to pinned section
-				let oldType = tab.type
-				
-				// Remove from appropriate array first
-				if oldType == .normal {
-					normalTabs.removeAll { $0.id == tab.id }
-				} else if oldType == .bookmark {
-					bookmarkTabs.removeAll { $0.id == tab.id }
-				}
-				
-				insertTabAtPosition(tab, type: .pinned, in: currentWorkspace)
+		let wasPin = tab.type == .pinned
+		let newType = wasPin ? TabType.normal : TabType.pinned
+		
+		// Calculate new display order for the tab
+		let newOrder = calculateNewOrderForTab(tab, newType: newType, in: currentWorkspace)
+		
+		// Update tab properties
+		tab.type = newType
+		tab.displayOrder = newOrder
+		
+		// Update display order of other tabs to maintain proper ordering
+		updateDisplayOrderAfterTypeChange(for: tab, wasPin: wasPin, in: currentWorkspace)
+		
+		// Ensure WebView exists
+		ensureWebView(for: tab)
+		
+		saveChanges()
+	}
+	
+	private func calculateNewOrderForTab(_ tab: Tab, newType: TabType, in workspace: Workspace) -> Int {
+		let tabsOfNewType = workspace.tabs.filter { $0.type == newType }
+		
+		if tabsOfNewType.isEmpty {
+			// If there are no tabs of this type, use 0 as the base order
+			return 0
+		}
+		
+		if newType == .pinned {
+			// For pinning, add to the end of pinned tabs
+			return tabsOfNewType.map { $0.displayOrder }.max()! + 1
+		} else {
+			// For unpinning, add to the beginning of normal tabs
+			return tabsOfNewType.map { $0.displayOrder }.min()! - 1
+		}
+	}
+	
+	private func updateDisplayOrderAfterTypeChange(for changedTab: Tab, wasPin: Bool, in workspace: Workspace) {
+		// Normalize all display orders to remove gaps and ensure proper sequence
+		let tabsByType: [TabType: [Tab]] = [
+			.pinned: workspace.tabs.filter { $0.type == .pinned && $0.id != changedTab.id },
+			.bookmark: workspace.tabs.filter { $0.type == .bookmark && $0.id != changedTab.id },
+			.normal: workspace.tabs.filter { $0.type == .normal && $0.id != changedTab.id }
+		]
+		
+		// Update orders for each type
+		for (type, tabs) in tabsByType {
+			let sortedTabs = tabs.sorted { $0.displayOrder < $1.displayOrder }
+			for (index, tab) in sortedTabs.enumerated() {
+				tab.displayOrder = index
 			}
+		}
+		
+		// Ensure the changed tab has a valid order
+		if changedTab.displayOrder < 0 {
+			// If it's now negative, put it at the beginning
+			changedTab.displayOrder = 0
 			
-			// Ensure WebView exists
-			ensureWebView(for: tab)
-			
-			saveChanges()
+			// Shift other tabs of the same type
+			workspace.tabs
+				.filter { $0.type == changedTab.type && $0.id != changedTab.id }
+				.forEach { $0.displayOrder += 1 }
 		}
 	}
 	
@@ -117,6 +184,23 @@ class BrowserViewModel {
 		workspace.tabs.removeAll()
 		workspace.tabs.append(contentsOf: reorderedPinned)
 		workspace.tabs.append(contentsOf: nonPinnedTabs)
+		
+		saveChanges()
+	}
+	
+	func reorderTabs(type: TabType, in workspace: Workspace, from source: IndexSet, to destination: Int) {
+		// Get tabs of the requested type, sorted by display order
+		var tabs = workspace.tabs
+			.filter { $0.type == type }
+			.sorted { $0.displayOrder < $1.displayOrder }
+		
+		// Perform the move operation
+		tabs.move(fromOffsets: source, toOffset: destination)
+		
+		// Update display orders to reflect new ordering
+		for (index, tab) in tabs.enumerated() {
+			tab.displayOrder = index
+		}
 		
 		saveChanges()
 	}
@@ -416,26 +500,25 @@ class BrowserViewModel {
 		guard let context = modelContext,
 			  let currentWorkspace = await getCurrentWorkspace(for: windowUUID) else { return }
 		
-		// Handle pinned tabs at profile level
-		if type == .pinned {
-			addNewPinnedTab(title: title, url: url)
-			return
-		}
+		// Find the maximum order value for tabs of this type to append at the end
+		let maxOrder = currentWorkspace.tabs
+			.filter { $0.type == type }
+			.map { $0.displayOrder }
+			.max() ?? -1
 		
-		// Create the new tab always in the current workspace, regardless of source
-		let newTab = Tab(title: title, url: url, type: type, workspace: currentWorkspace)
+		// Create the new tab with the correct order
+		let newTab = Tab(
+			title: title,
+			url: url,
+			type: type,
+			workspace: currentWorkspace,
+			displayOrder: maxOrder + 1
+		)
+		
 		context.insert(newTab)
 		currentWorkspace.tabs.append(newTab)
 		
-		// Add to appropriate tabs array
-		if type == .normal {
-			normalTabs.append(newTab)
-		} else if type == .bookmark {
-			bookmarkTabs.append(newTab)
-		}
-		
 		// Ensure WebView is created before selecting the tab
-		// If configuration is provided, use it instead of creating a new one
 		if let providedConfig = configuration {
 			createWebViewWithConfiguration(for: newTab, configuration: providedConfig)
 		} else {
@@ -475,24 +558,18 @@ class BrowserViewModel {
 		if let workspace = tab.workspace {
 			workspace.tabs.removeAll { $0.id == tab.id }
 			
-			// Update our local arrays
-			switch tab.type {
-			case .normal:
-				normalTabs.removeAll { $0.id == tab.id }
-				// Update current tab selection
-				for windowId in affectedWindows {
+			// Update display orders after removal
+			normalizeDisplayOrders(in: workspace)
+			
+			// Update current tab selection
+			for windowId in affectedWindows {
+				if tab.type == .normal {
 					if !normalTabs.isEmpty {
-						if let index = normalTabs.firstIndex(where: { $0.id == tab.id }) {
-							selectTab(normalTabs[max(0, index - 1)], for: windowId)
-						}
+						selectTab(normalTabs[0], for: windowId)
 					} else {
 						selectTab(nil, for: windowId)
 					}
 				}
-			case .bookmark:
-				bookmarkTabs.removeAll { $0.id == tab.id }
-			case .pinned:
-				break // No need to handle separately as it's part of workspace.tabs
 			}
 		}
 		
@@ -558,19 +635,19 @@ class BrowserViewModel {
 		if currentWorkspace?.id == workspace.id {
 			currentTab = nil
 			
-			// Clear arrays
-			normalTabs = []
-			bookmarkTabs = []
+			// Instead of trying to clear the computed arrays directly,
+			// we'll just set the current workspace to nil after deleting
 		}
 		
 		// Clean up all WebViews for tabs in this workspace
 		let profileId = workspace.profile?.id ?? UUID()
 		for tab in workspace.tabs {
-			if let webView = webViewsByProfile[profileId]?[tab.id] {
+			if let webViewId = tab.webViewId,
+			   let webView = webViewsByProfile[profileId]?[webViewId] {
 				webView.stopLoading()
 				webView.loadHTMLString("", baseURL: nil)
-				webViewsByProfile[profileId]?.removeValue(forKey: tab.id)
-				navigationDelegatesByProfile[profileId]?.removeValue(forKey: tab.id)
+				webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
+				navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
 			}
 		}
 		
@@ -592,6 +669,53 @@ class BrowserViewModel {
 
 	func toggleSidebar() {
 		// Handle sidebar toggle logic
+	}
+	
+	func toggleBookmark(_ tab: Tab) {
+		guard let currentWorkspace = currentWorkspace else { return }
+		
+		if tab.type == .bookmark {
+			// Convert to normal tab
+			tab.type = .normal
+			tab.bookmarkedUrl = nil
+		} else {
+			// Convert to bookmark tab
+			let maxBookmarkOrder = currentWorkspace.tabs
+				.filter { $0.type == .bookmark }
+				.map { $0.displayOrder }
+				.max() ?? -1
+				
+			tab.type = .bookmark
+			tab.bookmarkedUrl = tab.url
+			tab.displayOrder = maxBookmarkOrder + 1
+		}
+		
+		// Update display orders to ensure proper sequencing
+		normalizeDisplayOrders(in: currentWorkspace)
+		
+		saveChanges()
+	}
+	
+	func normalizeDisplayOrders(in workspace: Workspace) {
+		// Group tabs by type
+		let pinnedTabs = workspace.tabs.filter { $0.type == .pinned }.sorted { $0.displayOrder < $1.displayOrder }
+		let bookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }.sorted { $0.displayOrder < $1.displayOrder }
+		let normalTabs = workspace.tabs.filter { $0.type == .normal }.sorted { $0.displayOrder < $1.displayOrder }
+		
+		// Update display orders for each group
+		for (index, tab) in pinnedTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		for (index, tab) in bookmarkTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		for (index, tab) in normalTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		saveChanges()
 	}
 
 	// MARK: - WebView Management
@@ -894,19 +1018,15 @@ class BrowserViewModel {
 		workspaceSelectionsByWindow[windowId] = workspace?.id
 		
 		if let workspace = workspace {
-			// Only update tab arrays if workspace changed
+			// Only update tab selection if workspace changed
 			if workspace.id != oldWorkspace?.id {
-				// Preserve WebView states by checking existing tabs
-				let newBookmarkTabs = workspace.tabs.filter { $0.type == .bookmark }
-				let newNormalTabs = workspace.tabs.filter { $0.type == .normal }
-				
-				// Update arrays while preserving any existing WebView states
-				bookmarkTabs = newBookmarkTabs
-				normalTabs = newNormalTabs
-				
 				// Update current tab selection if needed
-				if getSelectedTab(for: windowId) == nil && !normalTabs.isEmpty {
-					selectTab(normalTabs.first, for: windowId)
+				if getSelectedTab(for: windowId) == nil {
+					// Select the first normal tab if available
+					let firstNormalTab = workspace.tabs.first(where: { $0.type == .normal })
+					if let firstTab = firstNormalTab {
+						selectTab(firstTab, for: windowId)
+					}
 				}
 			}
 			
@@ -915,10 +1035,8 @@ class BrowserViewModel {
 				await switchToProfile(workspace.profile)
 			}
 		} else {
-			// Clear tabs only if we're actually removing the workspace
+			// Clear tab selection if we're removing the workspace
 			if oldWorkspace != nil {
-				bookmarkTabs = []
-				normalTabs = []
 				selectTab(nil, for: windowId)
 			}
 		}
@@ -927,9 +1045,11 @@ class BrowserViewModel {
 		currentWorkspace = workspace
 		
 		// Ensure all tabs have their WebViews
-		Task {
-			for tab in normalTabs + bookmarkTabs {
-				ensureWebView(for: tab)
+		if let workspace = workspace {
+			Task {
+				for tab in workspace.tabs {
+					ensureWebView(for: tab)
+				}
 			}
 		}
 	}
@@ -1104,6 +1224,31 @@ class BrowserViewModel {
 		modelContext?.insert(newSettings)
 		
 		return newSettings
+	}
+	
+	func reindexArrays() {
+		guard let currentWorkspace = currentWorkspace else { return }
+		
+		// Group tabs by type
+		let allTabs = currentWorkspace.tabs
+		let pinnedTabs = allTabs.filter { $0.type == .pinned }.sorted { $0.displayOrder < $1.displayOrder }
+		let bookmarkTabs = allTabs.filter { $0.type == .bookmark }.sorted { $0.displayOrder < $1.displayOrder }
+		let normalTabs = allTabs.filter { $0.type == .normal }.sorted { $0.displayOrder < $1.displayOrder }
+		
+		// Update display orders for each group
+		for (index, tab) in pinnedTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		for (index, tab) in bookmarkTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		for (index, tab) in normalTabs.enumerated() {
+			tab.displayOrder = index
+		}
+		
+		saveChanges()
 	}
 }
 

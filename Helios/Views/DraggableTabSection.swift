@@ -69,7 +69,7 @@ struct DraggableTabSection: View {
 				}
 				.onMove { source, destination in
 					if let workspace = viewModel.currentWorkspace {
-						viewModel.reorderPinnedTabs(in: workspace, from: source, to: destination)
+						viewModel.reorderTabs(type: tabType, in: workspace, from: source, to: destination)
 					}
 				}
 			}
@@ -103,44 +103,16 @@ struct DraggableTabSection: View {
 			if item.type == .pinned {
 				viewModel.togglePin(tab)
 			} else if item.type == .bookmark {
-				convertToNormalTab(tab)
+				viewModel.toggleBookmark(tab)
 			}
 			
 		case .bookmark:
-			toggleBookmark(tab)
+			viewModel.toggleBookmark(tab)
 			
 		case .pinned:
 			viewModel.togglePin(tab)
 		}
 		
 		return true
-	}
-	
-	private func toggleBookmark(_ tab: Tab) {
-		if tab.type == .bookmark {
-			convertToNormalTab(tab)
-		} else {
-			// Convert to bookmark
-			tab.type = .bookmark
-			tab.bookmarkedUrl = tab.url
-			
-			if let index = viewModel.normalTabs.firstIndex(where: { $0.id == tab.id }) {
-				viewModel.normalTabs.remove(at: index)
-				viewModel.bookmarkTabs.append(tab)
-			}
-		}
-		viewModel.saveChanges()
-	}
-	
-	private func convertToNormalTab(_ tab: Tab) {
-		tab.type = .normal
-		tab.bookmarkedUrl = nil
-		
-		if let index = viewModel.bookmarkTabs.firstIndex(where: { $0.id == tab.id }) {
-			viewModel.bookmarkTabs.remove(at: index)
-			viewModel.normalTabs.append(tab)
-		}
-		
-		viewModel.saveChanges()
 	}
 }
