@@ -22,7 +22,6 @@ struct SidebarView: View {
 	
 	var body: some View {
 		VStack {
-			
 			// URL Bar
 			URLBarView(
 				viewModel: viewModel,
@@ -32,11 +31,8 @@ struct SidebarView: View {
 			)
 			.padding(.vertical, 4)
 			
-			// Tabs List
-			List(selection: Binding(
-				get: { viewModel.getSelectedTab(for: windowId) },
-				set: { viewModel.selectTab($0, for: windowId) }
-			)) {
+			// Pinned tabs grid (outside the List to allow custom layout)
+			if !viewModel.pinnedTabs.isEmpty {
 				DraggableTabSection(
 					title: "Pinned Tabs",
 					tabs: viewModel.pinnedTabs,
@@ -44,7 +40,14 @@ struct SidebarView: View {
 					windowId: windowId,
 					viewModel: viewModel
 				)
-				
+				.padding(.horizontal, 8)
+			}
+			
+			// Tabs List for normal and bookmarked tabs
+			List(selection: Binding(
+				get: { viewModel.getSelectedTab(for: windowId) },
+				set: { viewModel.selectTab($0, for: windowId) }
+			)) {
 				if let currentWorkspace = viewModel.currentWorkspace {
 					Section {
 						HStack {
@@ -61,7 +64,6 @@ struct SidebarView: View {
 							}
 							.help("Edit Workspace")
 							.buttonStyle(TabButtonStyle(alignment: .center, expandWidth: false))
-
 						}
 					}
 				}

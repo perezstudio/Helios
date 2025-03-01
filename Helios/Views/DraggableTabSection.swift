@@ -47,33 +47,38 @@ struct DraggableTabSection: View {
 	@Bindable var viewModel: BrowserViewModel
 	
 	var body: some View {
-		Section(header: Text(title)) {
-			ForEach(tabs) { tab in
-				TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
-					.draggable(DraggableTabItem(id: tab.id, tab: tab, type: tab.type)) {
-						// Preview while dragging
-						HStack {
-							FaviconView(tab: tab, size: 16)
-							Text(tab.title)
-								.lineLimit(1)
+		// Use the PinnedTabsGrid for pinned tabs, regular list for other tab types
+		if tabType == .pinned {
+			PinnedTabsGrid(tabs: tabs, windowId: windowId, viewModel: viewModel)
+		} else {
+			Section(header: Text(title)) {
+				ForEach(tabs) { tab in
+					TabRow(tab: tab, windowId: windowId, viewModel: viewModel)
+						.draggable(DraggableTabItem(id: tab.id, tab: tab, type: tab.type)) {
+							// Preview while dragging
+							HStack {
+								FaviconView(tab: tab, size: 16)
+								Text(tab.title)
+									.lineLimit(1)
+							}
+							.padding(.horizontal, 8)
+							.padding(.vertical, 4)
+							.background(Color(.textBackgroundColor))
+							.cornerRadius(4)
 						}
-						.padding(.horizontal, 8)
-						.padding(.vertical, 4)
-						.background(Color(.textBackgroundColor))
-						.cornerRadius(4)
+				}
+				.onMove { source, destination in
+					if let workspace = viewModel.currentWorkspace {
+						viewModel.reorderPinnedTabs(in: workspace, from: source, to: destination)
 					}
-			}
-			.onMove { source, destination in
-				if let workspace = viewModel.currentWorkspace {
-					viewModel.reorderPinnedTabs(in: workspace, from: source, to: destination)
 				}
 			}
-		}
-		.dropDestination(for: DraggableTabItem.self) { items, location in
-			guard let item = items.first else { return false }
-			return handleDrop(of: item)
-		} isTargeted: { isTargeted in
-			// Optional visual feedback when drag is over the section
+			.dropDestination(for: DraggableTabItem.self) { items, location in
+				guard let item = items.first else { return false }
+				return handleDrop(of: item)
+			} isTargeted: { isTargeted in
+				// Optional visual feedback when drag is over the section
+			}
 		}
 	}
 	
