@@ -806,27 +806,35 @@ class BrowserViewModel {
 		
 		let oldProfile = currentProfile
 		
+		// First, properly dispose of the old profile's WebViews
+		if let oldProfile = oldProfile {
+			await cleanupProfileWebViews(oldProfile)
+		}
+		
 		await MainActor.run {
 			// Update current profile
 			currentProfile = newProfile
 			
 			if let newProfile = newProfile {
-				// Ensure all tabs have WebViews
-				let allTabs = normalTabs + bookmarkTabs + pinnedTabs
-				for tab in allTabs {
-					ensureWebView(for: tab)
-					// Force reload tabs
-					if let url = URL(string: tab.url),
-					   url.scheme != nil {
-						getWebView(for: tab).load(URLRequest(url: url))
-					}
-				}
-			}
-			
-			// Clean up old profile if needed
-			if let oldProfile = oldProfile {
+				// Wait briefly to ensure clean state transition
 				Task {
-					await cleanupUnusedWebViews(for: oldProfile)
+					try? await Task.sleep(nanoseconds: 50_000_000) // 50ms pause
+					
+					// Create fresh WebViews with proper isolation for all tabs
+					let allTabs = normalTabs + bookmarkTabs + pinnedTabs
+					for tab in allTabs {
+						// First clear any old webViewId to force new WebView creation
+						tab.webViewId = nil
+						
+						// Now create a fresh WebView
+						ensureWebView(for: tab)
+						
+						// Force reload tabs with fresh context
+						if let url = URL(string: tab.url),
+						   url.scheme != nil {
+							getWebView(for: tab).load(URLRequest(url: url))
+						}
+					}
 				}
 			}
 		}
@@ -938,13 +946,26 @@ class BrowserViewModel {
 		// Clean up the WebView
 		if let webViewId = tab.webViewId,
 		   let webView = webViewsByProfile[profileId]?[webViewId] {
+			// First stop any ongoing activity
 			webView.stopLoading()
+			
+			// Navigate to a blank page to release active resources
 			webView.loadHTMLString("", baseURL: nil)
+			
+			// Clear any custom handlers
+			webView.configuration.userContentController.removeAllUserScripts()
+			webView.configuration.userContentController.removeAllScriptMessageHandlers()
+			
+			// Drop navigation delegate
+			webView.navigationDelegate = nil
+			webView.uiDelegate = nil
+			
+			// Remove from our caches
 			webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
 			navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
 		}
 		
-		// Clear the webViewId from the tab
+		// Clear the webViewId from the tab to ensure we'll create a fresh one next time
 		tab.webViewId = nil
 		try? modelContext?.save()
 	}

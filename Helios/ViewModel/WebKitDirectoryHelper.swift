@@ -8,7 +8,11 @@ class WebKitDirectoryHelper {
 			.appendingPathComponent("Profiles")
 			.appendingPathComponent(profile.id.uuidString)
 
-		let dataStore = WKWebsiteDataStore.default() // Ensure persistent storage
+		// Ensure directory exists
+		try? FileManager.default.createDirectory(at: profilePath, withIntermediateDirectories: true, attributes: nil)
+
+		// Create a persistent data store for this profile with a unique identifier
+		let dataStore = WKWebsiteDataStore(forIdentifier: profile.id)
 		return dataStore
 	}
 	
@@ -18,7 +22,7 @@ class WebKitDirectoryHelper {
 			.appendingPathComponent("Profiles")
 			.appendingPathComponent(profile.id.uuidString)
 
-		// Get the correct data store (no optional check needed)
+		// Get the correct data store
 		let dataStore = SessionManager.shared.getDataStore(for: profile)
 
 		// Remove all data for the profile
@@ -30,5 +34,10 @@ class WebKitDirectoryHelper {
 
 		// Delete the profile directory
 		try? FileManager.default.removeItem(at: profilePath)
+		
+		// Also clear any custom handlers in SessionManager
+		DispatchQueue.main.async {
+			SessionManager.shared.invalidateConfiguration(for: profile)
+		}
 	}
 }
