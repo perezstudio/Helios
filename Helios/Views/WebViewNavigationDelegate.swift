@@ -136,14 +136,28 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 			decisionHandler(.allow)
 			return
 		}
-
-		// Only Command+Click should create new tabs
-		let isCommandClick = navigationAction.modifierFlags.contains(.command)
 		
+		// Skip handling for same-page anchors and javascript: URLs
+		if url.absoluteString.hasPrefix("javascript:") ||
+		   (url.fragment != nil && url.absoluteString.hasPrefix(webView.url?.absoluteString ?? "")) {
+			decisionHandler(.allow)
+			return
+		}
+		
+		// Special URL schemes handling
+		if let scheme = url.scheme?.lowercased(),
+		   ["mailto", "tel", "facetime", "maps", "itms-apps"].contains(scheme) {
+			NSWorkspace.shared.open(url)
+			decisionHandler(.cancel)
+			return
+		}
+		
+		// Handle link clicks based on type and modifiers
 		switch navigationAction.navigationType {
 		case .linkActivated:
-			if isCommandClick {
-				// Command+Click - open in new tab
+			let shouldOpenInNewTab = shouldOpenInNewTab(navigationAction)
+			
+			if shouldOpenInNewTab {
 				Task { @MainActor in
 					await viewModel?.addNewTab(
 						windowId: windowId,
@@ -152,42 +166,61 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 					)
 				}
 				decisionHandler(.cancel)
-				return
+			} else {
+				decisionHandler(.allow)
 			}
 			
-			// Check if this is a JavaScript-initiated window open
-			if navigationAction.targetFrame == nil {
-				if navigationAction.buttonNumber == 0 {
-					// Regular click without target frame - load in current tab
-					webView.load(URLRequest(url: url))
-					decisionHandler(.cancel)
-				} else {
-					// JavaScript window.open or target="_blank" - open in new tab
-					Task { @MainActor in
-						await viewModel?.addNewTab(
-							windowId: windowId,
-							title: "New Tab",
-							url: url.absoluteString
-						)
-					}
-					decisionHandler(.cancel)
-				}
-				return
-			}
-			
-			// Regular link click - navigate in current tab
+		case .formSubmitted, .formResubmitted:
+			// Always handle forms in the current tab
 			decisionHandler(.allow)
 			
-		case .backForward, .reload, .formSubmitted, .formResubmitted:
+		case .backForward, .reload:
+			// Navigation controls - allow in current tab
 			decisionHandler(.allow)
 			
 		case .other:
-			// Handle other navigation types in current tab
-			decisionHandler(.allow)
+			// For other actions, handle pop-up windows
+			if navigationAction.targetFrame == nil {
+				// This is likely a new window request (e.g., window.open())
+				Task { @MainActor in
+					await viewModel?.addNewTab(
+						windowId: windowId,
+						title: "New Tab",
+						url: url.absoluteString
+					)
+				}
+				decisionHandler(.cancel)
+			} else {
+				decisionHandler(.allow)
+			}
 			
 		@unknown default:
 			decisionHandler(.allow)
 		}
+	}
+	
+	private func shouldOpenInNewTab(_ navigationAction: WKNavigationAction) -> Bool {
+		// Command click (macOS standard for new tab)
+		if navigationAction.modifierFlags.contains(.command) {
+			return true
+		}
+		
+		// Middle-click (if detected)
+		if navigationAction.buttonNumber == 1 {
+			return true
+		}
+		
+		// Check for target="_blank" or rel="noopener" links
+		if navigationAction.targetFrame == nil {
+			return true
+		}
+		
+		// Handle window.open() JavaScript calls
+		if !navigationAction.targetFrame!.isMainFrame {
+			return true
+		}
+		
+		return false
 	}
 
 	// MARK: - WKUIDelegate
@@ -197,16 +230,19 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 				 for navigationAction: WKNavigationAction,
 				 windowFeatures: WKWindowFeatures) -> WKWebView? {
 		
-		// Handle JavaScript window.open()
+		// Always open these in a new tab
 		if let url = navigationAction.request.url {
 			Task { @MainActor in
 				await viewModel?.addNewTab(
 					windowId: windowId,
 					title: "New Tab",
-					url: url.absoluteString
+					url: url.absoluteString,
+					configuration: configuration // You might want to add this parameter
 				)
 			}
 		}
+		
+		// Return nil to indicate we've handled it in our own way
 		return nil
 	}
 	

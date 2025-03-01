@@ -49,24 +49,43 @@ class BrowserViewModel {
 		}
 	}
 	
+	private func getLastPinnedTabIndex(in workspace: Workspace) -> Int {
+		return workspace.tabs.lastIndex(where: { $0.type == .pinned }) ?? -1
+	}
+	
+	private func insertTabAtPosition(_ tab: Tab, type: TabType, in workspace: Workspace) {
+		// First remove the tab from its current position
+		workspace.tabs.removeAll { $0.id == tab.id }
+		
+		// Update the tab type
+		tab.type = type
+		
+		if type == .pinned {
+			// Find the last pinned tab
+			if let lastPinnedIndex = workspace.tabs.lastIndex(where: { $0.type == .pinned }) {
+				// Insert after the last pinned tab
+				workspace.tabs.insert(tab, at: lastPinnedIndex + 1)
+			} else {
+				// No pinned tabs, insert at the beginning
+				workspace.tabs.insert(tab, at: 0)
+			}
+		} else {
+			// For non-pinned tabs, add to the end
+			workspace.tabs.append(tab)
+		}
+	}
+	
 	func togglePin(_ tab: Tab) {
-		guard let context = modelContext,
-			  let currentWorkspace = currentWorkspace else { return }
+		guard let currentWorkspace = currentWorkspace else { return }
 		
 		Task { @MainActor in
 			if tab.type == .pinned {
-				// Remove from arrays first
-				if let workspace = tab.workspace {
-					// Update type
-					tab.type = .normal
-					// Add to normal tabs if it's in current workspace
-					if workspace.id == currentWorkspace.id {
-						normalTabs.append(tab)
-					}
-				}
+				// Unpinning - move to normal section
+				insertTabAtPosition(tab, type: .normal, in: currentWorkspace)
+				normalTabs.append(tab)
 			} else {
-				// Handle pinning
-				let oldType = tab.type // Store the old type before changing it
+				// Pinning - move to pinned section
+				let oldType = tab.type
 				
 				// Remove from appropriate array first
 				if oldType == .normal {
@@ -75,15 +94,10 @@ class BrowserViewModel {
 					bookmarkTabs.removeAll { $0.id == tab.id }
 				}
 				
-				// Then change type
-				tab.type = .pinned
+				insertTabAtPosition(tab, type: .pinned, in: currentWorkspace)
 			}
 			
-			// Force UI update
-			normalTabs = Array(normalTabs)
-			bookmarkTabs = Array(bookmarkTabs)
-			
-			// Ensure the WebView exists and is attached to correct profile
+			// Ensure WebView exists
 			ensureWebView(for: tab)
 			
 			saveChanges()
@@ -91,13 +105,18 @@ class BrowserViewModel {
 	}
 	
 	func reorderPinnedTabs(in workspace: Workspace, from source: IndexSet, to destination: Int) {
-		let tabs = workspace.tabs.filter { $0.type == .pinned }
-		var reorderedTabs = tabs
-		reorderedTabs.move(fromOffsets: source, toOffset: destination)
+		// Get the pinned tabs in their current order
+		let pinnedTabs = workspace.tabs.filter { $0.type == .pinned }
+		var reorderedPinned = pinnedTabs
+		reorderedPinned.move(fromOffsets: source, toOffset: destination)
 		
-		// Update the workspace's tabs while preserving non-pinned tabs
+		// Get the non-pinned tabs
 		let nonPinnedTabs = workspace.tabs.filter { $0.type != .pinned }
-		workspace.tabs = reorderedTabs + nonPinnedTabs
+		
+		// Update the workspace's tabs array with the new order
+		workspace.tabs.removeAll()
+		workspace.tabs.append(contentsOf: reorderedPinned)
+		workspace.tabs.append(contentsOf: nonPinnedTabs)
 		
 		saveChanges()
 	}
@@ -352,10 +371,45 @@ class BrowserViewModel {
 			getWebView(for: tab).goForward()
 		}
 	}
+	
+	private func createWebViewWithConfiguration(for tab: Tab, configuration: WKWebViewConfiguration) {
+		let profile = tab.workspace?.profile
+		let profileId = profile?.id ?? UUID()
+		
+		// Generate new WebView ID if needed
+		if tab.webViewId == nil {
+			tab.webViewId = UUID()
+		}
+		
+		// Create the WebView with the provided configuration
+		let webView = WKWebView(frame: .zero, configuration: configuration)
+		
+		// Set up WebView with profile
+		setupWebView(webView, for: tab, profile: profile)
+		
+		// Store WebView with its ID
+		if let webViewId = tab.webViewId {
+			if webViewsByProfile[profileId] == nil {
+				webViewsByProfile[profileId] = [:]
+			}
+			webViewsByProfile[profileId]?[webViewId] = webView
+		}
+		
+		// Load content if needed
+		if let url = URL(string: tab.url), url.scheme != nil {
+			webView.load(URLRequest(url: url))
+		}
+	}
 
 	
 	@MainActor
-	func addNewTab(windowId: UUID? = nil, title: String = "New Tab", url: String = "about:blank", type: TabType = .normal) async {
+	func addNewTab(
+		windowId: UUID? = nil,
+		title: String = "New Tab",
+		url: String = "about:blank",
+		type: TabType = .normal,
+		configuration: WKWebViewConfiguration? = nil
+	) async {
 		// Resolve the window ID
 		let windowUUID = windowId ?? WindowManager.shared.activeWindow ?? UUID()
 		
@@ -381,7 +435,12 @@ class BrowserViewModel {
 		}
 		
 		// Ensure WebView is created before selecting the tab
-		ensureWebView(for: newTab)
+		// If configuration is provided, use it instead of creating a new one
+		if let providedConfig = configuration {
+			createWebViewWithConfiguration(for: newTab, configuration: providedConfig)
+		} else {
+			ensureWebView(for: newTab)
+		}
 		
 		// Select the new tab and focus URL bar
 		selectTab(newTab, for: windowUUID)
