@@ -39,6 +39,7 @@ class BrowserViewModel {
 	private var currentProfile: Profile? = nil
 	private var webViewObservers: [UUID: NSObjectProtocol] = [:]
 	private var loadingTabs: Set<UUID> = []
+	var permissionObservers: [String: NSObjectProtocol] = [:]
 	
 	private var tabSelectionsByWindow: [UUID: UUID] = [:]
 	private var workspaceSelectionsByWindow: [UUID: UUID] = [:]
@@ -572,6 +573,8 @@ class BrowserViewModel {
 				}
 			}
 		}
+		
+		cleanupPermissionObservers(for: tab)
 		
 		// Clean up WebView
 		cleanupWebView(for: tab)
@@ -1212,15 +1215,23 @@ class BrowserViewModel {
 	
 	func getPageSettings(for tab: Tab) -> SiteSettings? {
 		guard let url = URL(string: tab.url),
-			  let profile = currentWorkspace?.profile else { return nil }
+			  let profile = currentWorkspace?.profile else {
+			print("Cannot get settings: missing URL or profile")
+			return nil
+		}
 		
 		// Find existing site settings that match the URL
+		let host = url.host ?? ""
+		print("Looking for settings for host: \(host)")
+		
 		if let matchingSetting = profile.siteSettings.first(where: { $0.appliesTo(url: url) }) {
+			print("Found existing settings. Camera: \(matchingSetting.camera?.rawValue ?? "nil")")
 			return matchingSetting
 		}
 		
 		// If no matching settings exist, create a new one
-		let newSettings = SiteSettings(hostPattern: url.host ?? "", profile: profile)
+		print("Creating new settings for \(host)")
+		let newSettings = SiteSettings(hostPattern: host, profile: profile)
 		modelContext?.insert(newSettings)
 		
 		return newSettings
@@ -1249,6 +1260,55 @@ class BrowserViewModel {
 		}
 		
 		saveChanges()
+	}
+	
+	private func cleanupPermissionObservers(for tab: Tab) {
+		if let url = URL(string: tab.url), let host = url.host {
+			let keys = permissionObservers.keys.filter { $0.hasPrefix("\(host)-") }
+			for key in keys {
+				if let observer = permissionObservers[key] {
+					NotificationCenter.default.removeObserver(observer)
+					permissionObservers.removeValue(forKey: key)
+				}
+			}
+		}
+	}
+	
+	// In your code where you create WKWebViewConfiguration objects
+	func configureWebViewForMediaSupport(_ configuration: WKWebViewConfiguration) {
+		// Allow autoplay of media
+		configuration.mediaTypesRequiringUserActionForPlayback = []
+		
+		// Enable modern media APIs
+		configuration.allowsAirPlayForMediaPlayback = true
+		
+		// Set preferences
+		let preferences = WKPreferences()
+		preferences.javaScriptCanOpenWindowsAutomatically = true
+		
+		// For modern WebKit features
+		if #available(macOS 10.15, *) {
+			configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+		} else {
+			preferences.javaScriptEnabled = true
+		}
+		
+		configuration.preferences = preferences
+		
+		// Add user script to enhance media permissions
+		let mediaScript = """
+		navigator.permissions.query = (function(original) {
+			return function(query) {
+				if (query.name === 'camera' || query.name === 'microphone') {
+					return Promise.resolve({ state: 'prompt', onchange: null });
+				}
+				return original.apply(this, arguments);
+			};
+		})(navigator.permissions.query);
+		"""
+		
+		let script = WKUserScript(source: mediaScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+		configuration.userContentController.addUserScript(script)
 	}
 }
 

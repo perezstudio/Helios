@@ -43,6 +43,11 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 		}
 		fetchFavicon(webView: webView)
 		
+		// Check permissions for the current site
+		if let host = webView.url?.host {
+			checkAndRequestPermissions(for: host, webView: webView)
+		}
+		
 		// Enhanced PiP setup script
 		let script = """
 			const videos = document.getElementsByTagName('video');
@@ -94,7 +99,7 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 		webView.evaluateJavaScript(script, completionHandler: nil)
 	}
 
-	// New method to toggle Picture in Picture
+	// Toggle Picture in Picture
 	func togglePictureInPicture(in webView: WKWebView) {
 		let script = """
 		(function() {
@@ -112,11 +117,78 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 		webView.evaluateJavaScript(script, completionHandler: nil)
 	}
 
-	// Optional: Add WKUIDelegate method to support PiP preferences
+	// Handle JavaScript preferences
 	func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
-		// Ensure JavaScript and PiP are supported
-		preferences.allowsContentJavaScript = true
-		decisionHandler(.allow, preferences)
+		// Configure JavaScript permission
+		if let tab = tab,
+		   let settings = viewModel?.getPageSettings(for: tab),
+		   let jsPermission = settings.javascript {
+			preferences.allowsContentJavaScript = (jsPermission == .allow)
+		} else {
+			// Default to allowing JavaScript if no explicit setting
+			preferences.allowsContentJavaScript = true
+		}
+		
+		// Handle URL policies
+		guard let url = navigationAction.request.url else {
+			decisionHandler(.allow, preferences)
+			return
+		}
+		
+		// Skip handling for same-page anchors and javascript: URLs
+		if url.absoluteString.hasPrefix("javascript:") ||
+		   (url.fragment != nil && url.absoluteString.hasPrefix(webView.url?.absoluteString ?? "")) {
+			decisionHandler(.allow, preferences)
+			return
+		}
+		
+		// Special URL schemes handling
+		if let scheme = url.scheme?.lowercased(),
+		   ["mailto", "tel", "facetime", "maps", "itms-apps"].contains(scheme) {
+			NSWorkspace.shared.open(url)
+			decisionHandler(.cancel, preferences)
+			return
+		}
+		
+		// Handle navigation types
+		switch navigationAction.navigationType {
+		case .linkActivated:
+			let shouldOpenInNewTab = shouldOpenInNewTab(navigationAction)
+			
+			if shouldOpenInNewTab {
+				Task { @MainActor in
+					await viewModel?.addNewTab(
+						windowId: windowId,
+						title: "New Tab",
+						url: url.absoluteString
+					)
+				}
+				decisionHandler(.cancel, preferences)
+			} else {
+				decisionHandler(.allow, preferences)
+			}
+			
+		case .formSubmitted, .formResubmitted, .backForward, .reload:
+			decisionHandler(.allow, preferences)
+			
+		case .other:
+			if navigationAction.targetFrame == nil {
+				// New window request
+				Task { @MainActor in
+					await viewModel?.addNewTab(
+						windowId: windowId,
+						title: "New Tab",
+						url: url.absoluteString
+					)
+				}
+				decisionHandler(.cancel, preferences)
+			} else {
+				decisionHandler(.allow, preferences)
+			}
+			
+		@unknown default:
+			decisionHandler(.allow, preferences)
+		}
 	}
 	
 	func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -237,7 +309,7 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 					windowId: windowId,
 					title: "New Tab",
 					url: url.absoluteString,
-					configuration: configuration // You might want to add this parameter
+					configuration: configuration
 				)
 			}
 		}
@@ -246,68 +318,85 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 		return nil
 	}
 	
-//	func webView(_ webView: WKWebView, didStartMediaPlaybackFor source: WKFrameInfo) {
-//		// Enable native video controls which include PiP
-//		let script = """
-//			const video = document.querySelector('video');
-//			if (video) {
-//				video.controls = true;
-//			}
-//		"""
-//		webView.evaluateJavaScript(script, completionHandler: nil)
-//	}
-	
-	// MARK: - Permission Handling
-	
-	func webView(_ webView: WKWebView,
-				 requestMediaCapturePermission: @escaping (WKPermissionDecision) -> Void) {
-		guard let url = webView.url,
-			  let host = url.host,
-			  let tab = tab else {
-			requestMediaCapturePermission(.deny)
-			return
-		}
-		
-		// Check existing permissions
-		if let settings = viewModel?.getPageSettings(for: tab) {
-			if let cameraPermission = settings.camera {
-				requestMediaCapturePermission(cameraPermission == .allow ? .grant : .deny)
-				return
-			}
-		}
-		
-		let message = "\(host) wants to use your camera and microphone"
-		showPermissionRequest(host: host, message: message) { allowed in
-			if allowed {
-				if let settings = self.viewModel?.getPageSettings(for: tab) {
-					settings.camera = .allow
-					settings.microphone = .allow
-					try? self.viewModel?.modelContext?.save()
-				}
-				requestMediaCapturePermission(.grant)
-			} else {
-				if let settings = self.viewModel?.getPageSettings(for: tab) {
-					settings.camera = .block
-					settings.microphone = .block
-					try? self.viewModel?.modelContext?.save()
-				}
-				requestMediaCapturePermission(.deny)
-			}
-		}
-	}
-	
 	// MARK: - Permission Helpers
 	
 	private func checkAndRequestPermissions(for host: String, webView: WKWebView) {
 		guard let tab = tab,
 			  let settings = viewModel?.getPageSettings(for: tab) else { return }
 		
+		// Initialize default permissions if needed
 		if settings.camera == nil { settings.camera = .ask }
 		if settings.microphone == nil { settings.microphone = .ask }
 		if settings.location == nil { settings.location = .ask }
 		if settings.notifications == nil { settings.notifications = .ask }
+		if settings.javascript == nil { settings.javascript = .allow }
 		
 		try? viewModel?.modelContext?.save()
+		
+		// Apply JavaScript setting immediately
+		if let jsPermission = settings.javascript {
+			webView.configuration.defaultWebpagePreferences.allowsContentJavaScript = (jsPermission == .allow)
+		}
+	}
+	
+	private func handlePermissionPrompt(host: String, message: String, permission: PermissionManager.PermissionFeature, completion: @escaping (Bool) -> Void) {
+		// If the permission manager is already showing a request, use it
+		if let activeRequest = PermissionManager.shared.activeRequest,
+		   activeRequest.domain == host && activeRequest.permission == permission {
+			// Create observer variable before using it in closure
+			let notificationName = NSNotification.Name("PermissionResponseReceived")
+			var observer: NSObjectProtocol?
+			
+			// Now initialize the observer with the variable already declared
+			observer = NotificationCenter.default.addObserver(forName: notificationName, object: nil, queue: .main) { notification in
+				guard let userInfo = notification.userInfo,
+					  let domain = userInfo["domain"] as? String,
+					  let permissionFeature = userInfo["permission"] as? PermissionManager.PermissionFeature,
+					  let response = userInfo["response"] as? PermissionState,
+					  domain == host && permissionFeature == permission else {
+					return
+				}
+				
+				if let observer = observer {
+					NotificationCenter.default.removeObserver(observer)
+				}
+				completion(response == .allow)
+			}
+			
+			// Store the observer to clean up later
+			if let observer = observer {
+				viewModel?.permissionObservers["\(host)-\(permission.rawValue)"] = observer
+			}
+			return
+		}
+		
+		// Otherwise, create our own request
+		PermissionManager.shared.requestPermission(for: host, permission: permission)
+		
+		// Create observer variable before using it in closure
+		let notificationName = NSNotification.Name("PermissionResponseReceived")
+		var observer: NSObjectProtocol?
+		
+		// Now initialize the observer with the variable already declared
+		observer = NotificationCenter.default.addObserver(forName: notificationName, object: nil, queue: .main) { notification in
+			guard let userInfo = notification.userInfo,
+				  let domain = userInfo["domain"] as? String,
+				  let permissionFeature = userInfo["permission"] as? PermissionManager.PermissionFeature,
+				  let response = userInfo["response"] as? PermissionState,
+				  domain == host && permissionFeature == permission else {
+				return
+			}
+			
+			if let observer = observer {
+				NotificationCenter.default.removeObserver(observer)
+			}
+			completion(response == .allow)
+		}
+		
+		// Store the observer to clean up later
+		if let observer = observer {
+			viewModel?.permissionObservers["\(host)-\(permission.rawValue)"] = observer
+		}
 	}
 	
 	private func showPermissionRequest(host: String, message: String, completion: @escaping (Bool) -> Void) {
@@ -325,6 +414,47 @@ class WebViewNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
 		
 		alert.beginSheetModal(for: window) { response in
 			completion(response == .alertFirstButtonReturn)
+		}
+	}
+	
+	// Basic permission handlers - keep only what works
+	func webView(_ webView: WKWebView, requestMediaCapturePermission: @escaping (WKPermissionDecision) -> Void) {
+		print("Received media permission request")
+		
+		// Auto-approve for testing
+		requestMediaCapturePermission(.grant)
+		
+		/* When you want to implement proper permissions later:
+		if let url = webView.url, let host = url.host {
+			showSimplePermissionAlert(
+				title: "Camera and Microphone Access",
+				message: "\(host) wants to use your camera and microphone.",
+				callback: requestMediaCapturePermission
+			)
+		} else {
+			requestMediaCapturePermission(.deny)
+		}
+		*/
+	}
+
+	// Helper method for showing permission alerts (for later use)
+	private func showSimplePermissionAlert(title: String, message: String, callback: @escaping (WKPermissionDecision) -> Void) {
+		DispatchQueue.main.async {
+			let alert = NSAlert()
+			alert.messageText = title
+			alert.informativeText = message
+			alert.alertStyle = .informational
+			alert.addButton(withTitle: "Allow")
+			alert.addButton(withTitle: "Block")
+			
+			if let window = NSApplication.shared.keyWindow {
+				alert.beginSheetModal(for: window) { response in
+					let allowed = response == .alertFirstButtonReturn
+					callback(allowed ? .grant : .deny)
+				}
+			} else {
+				callback(.deny)
+			}
 		}
 	}
 	

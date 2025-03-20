@@ -5,6 +5,18 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string></string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>UTTypeConformsTo</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.helios.dragged-tab</string>
+			<key>UTTypeTagSpecification</key>
+			<dict/>
+		</dict>
+		<dict>
 			<key>UTTypeTagSpecification</key>
 			<dict/>
 			<key>UTTypeDescription</key>

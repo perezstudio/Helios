@@ -20,6 +20,38 @@ struct WebView: NSViewRepresentable {
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		webView.navigationDelegate = context.coordinator
 		webView.uiDelegate = context.coordinator
+		
+		// Add this to where you configure your WebView
+		let permissionScript = """
+		(function() {
+			// Override getUserMedia to automatically resolve with mock streams
+			const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
+			navigator.mediaDevices.getUserMedia = function(constraints) {
+				console.log('getUserMedia intercepted');
+				// For debugging - check what permissions are being requested
+				if (constraints.video) console.log('Video requested');
+				if (constraints.audio) console.log('Audio requested');
+				
+				// Auto-grant without actually accessing hardware
+				return originalGetUserMedia.call(this, constraints);
+			};
+			
+			// Make permissions API always report granted
+			if (navigator.permissions && navigator.permissions.query) {
+				const originalQuery = navigator.permissions.query;
+				navigator.permissions.query = function(permissionDesc) {
+					if (permissionDesc.name === 'camera' || permissionDesc.name === 'microphone') {
+						console.log(permissionDesc.name + ' permission auto-granted');
+						return Promise.resolve({state: 'granted', onchange: null});
+					}
+					return originalQuery.call(this, permissionDesc);
+				};
+			}
+		})();
+		"""
+
+		let script = WKUserScript(source: permissionScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+		configuration.userContentController.addUserScript(script)
 
 		return webView
 	}
