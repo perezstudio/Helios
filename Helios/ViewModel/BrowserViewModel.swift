@@ -17,10 +17,8 @@ class BrowserViewModel {
 	var urlInput: String = ""
 	var currentURL: URL? = nil
 	var pinnedTabs: [Tab] {
-		guard let currentWorkspace = currentWorkspace else { return [] }
-		return currentWorkspace.tabs
-			.filter { $0.type == .pinned }
-			.sorted { $0.displayOrder < $1.displayOrder }
+		guard let currentProfile = currentWorkspace?.profile else { return [] }
+		return currentProfile.pinnedTabs.sorted { $0.displayOrder < $1.displayOrder }
 	}
 	var bookmarkTabs: [Tab] {
 		guard let currentWorkspace = currentWorkspace else { return [] }
@@ -106,7 +104,7 @@ class BrowserViewModel {
 	}
 	
 	func togglePin(_ tab: Tab) {
-		guard let currentWorkspace = currentWorkspace else { return }
+		guard let currentWorkspace = currentWorkspace, let profile = currentWorkspace.profile else { return }
 		
 		let wasPin = tab.type == .pinned
 		let newType = wasPin ? TabType.normal : TabType.pinned
@@ -123,6 +121,9 @@ class BrowserViewModel {
 		
 		// Ensure WebView exists
 		ensureWebView(for: tab)
+		
+		// Notify of pinned tab change
+		NotificationCenter.default.post(name: NSNotification.Name("PinnedTabsChanged"), object: nil)
 		
 		saveChanges()
 	}
@@ -581,6 +582,12 @@ class BrowserViewModel {
 		
 		// Delete from context
 		modelContext?.delete(tab)
+		
+		// If it was a pinned tab, refresh the pinned tabs view by notifying
+		if tab.type == .pinned {
+			NotificationCenter.default.post(name: NSNotification.Name("PinnedTabsChanged"), object: nil)
+		}
+		
 		saveChanges()
 	}
 
@@ -724,8 +731,9 @@ class BrowserViewModel {
 	// MARK: - WebView Management
 
 	private func ensureWebView(for tab: Tab) {
-		// For all tabs, use their workspace's profile
-		let profile = tab.workspace?.profile
+		// For pinned tabs, use the profile they belong to
+		// For other tabs, use their workspace's profile
+		let profile = tab.type == .pinned ? tab.profile : tab.workspace?.profile
 		let profileId = profile?.id ?? UUID()
 		
 		// If WebView already exists with correct configuration, ensure it's loaded
@@ -808,9 +816,11 @@ class BrowserViewModel {
 				
 				// Load pinned tabs if there's a profile
 				if let profile = currentProfile {
+					// Ensure WebViews are created for all pinned tabs in this profile
+					let pinnedTabs = profile.pinnedTabs
+					print("Loading \(pinnedTabs.count) pinned tabs for profile \(profile.name)")
 					
-					// Ensure WebViews are created for pinned tabs
-					for tab in profile.pinnedTabs {
+					for tab in pinnedTabs {
 						ensureWebView(for: tab)
 					}
 				}
@@ -923,9 +933,23 @@ class BrowserViewModel {
 	
 	func getCurrentWorkspace(for windowId: UUID) async -> Workspace? {
 		if let workspaceId = workspaceSelectionsByWindow[windowId] {
-			return workspaces.first(where: { $0.id == workspaceId })
+			if let workspace = workspaces.first(where: { $0.id == workspaceId }) {
+				// Ensure that the current profile is set correctly
+				await MainActor.run {
+					if currentProfile?.id != workspace.profile?.id {
+						currentProfile = workspace.profile
+					}
+				}
+				return workspace
+			}
 		}
-		return workspaces.first
+		let firstWorkspace = workspaces.first
+		if let workspace = firstWorkspace {
+			await MainActor.run {
+				currentProfile = workspace.profile
+			}
+		}
+		return firstWorkspace
 	}
 	
 	func switchToProfile(_ newProfile: Profile?) async {
@@ -947,8 +971,13 @@ class BrowserViewModel {
 				Task {
 					try? await Task.sleep(nanoseconds: 50_000_000) // 50ms pause
 					
-					// Create fresh WebViews with proper isolation for all tabs
-					let allTabs = normalTabs + bookmarkTabs + pinnedTabs
+					// Create fresh WebViews with proper isolation for all tabs in this profile
+					// First ensure WebViews are created for all pinned tabs in the profile
+					let profilePinnedTabs = newProfile.pinnedTabs
+					print("Loading \(profilePinnedTabs.count) pinned tabs for profile \(newProfile.name)")
+					
+					// Then add normal and bookmark tabs from the current workspace
+					let allTabs = normalTabs + bookmarkTabs + profilePinnedTabs
 					for tab in allTabs {
 						// First clear any old webViewId to force new WebView creation
 						tab.webViewId = nil

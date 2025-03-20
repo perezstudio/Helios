@@ -19,6 +19,7 @@ struct SidebarView: View {
 	@State private var selectedWorkspace: Workspace?
 	@State private var showUrlBarSheet: Bool = false
 	@Binding var columnVisibility: NavigationSplitViewVisibility
+	@State private var pinnedTabsChanged: Bool = false
 	
 	var body: some View {
 		VStack {
@@ -31,7 +32,8 @@ struct SidebarView: View {
 			)
 			.padding(.vertical, 4)
 			
-			// Pinned tabs grid (outside the List to allow custom layout)
+			// Pinned tabs grid for all pinned tabs in the current profile (outside the List to allow custom layout)
+			let _ = pinnedTabsChanged // Use the state variable to force refresh on changes
 			if !viewModel.pinnedTabs.isEmpty {
 				DraggableTabSection(
 					title: "Pinned Tabs",
@@ -182,6 +184,12 @@ struct SidebarView: View {
 			isUrlBarFocused = newValue
 			if !newValue {
 				viewModel.urlBarFocused = false
+			}
+		}
+		.onAppear {
+			// Set up observer for pinned tabs changes
+			NotificationCenter.default.addObserver(forName: NSNotification.Name("PinnedTabsChanged"), object: nil, queue: .main) { _ in
+				pinnedTabsChanged.toggle() // Toggle to force UI update
 			}
 		}
 	}
