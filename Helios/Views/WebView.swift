@@ -14,44 +14,35 @@ struct WebView: NSViewRepresentable {
 	var profile: Profile
 
 	func makeNSView(context: Context) -> WKWebView {
+		// Create a configuration with proper data store for this profile
 		let configuration = WKWebViewConfiguration()
 		configuration.websiteDataStore = SessionManager.shared.getDataStore(for: profile)
 
+		// Configure additional preferences for WebRTC
+		configuration.mediaTypesRequiringUserActionForPlayback = []
+		configuration.allowsAirPlayForMediaPlayback = true
+		
+		// Ensure JavaScript is enabled
+		configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+		
+		// Safely unwrap defaultWebpagePreferences and set allowsContentJavaScript
+		if let webpagePrefs = configuration.defaultWebpagePreferences {
+			webpagePrefs.allowsContentJavaScript = true
+		}
+		
+		// Modern WebKit settings for WebRTC
+		if #available(macOS 14.0, *) {
+			// Disable app-bound domain limitations for WebRTC
+			configuration.limitsNavigationsToAppBoundDomains = false
+		}
+
+		// Create the WebView with our enhanced configuration
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		webView.navigationDelegate = context.coordinator
 		webView.uiDelegate = context.coordinator
 		
-		// Add this to where you configure your WebView
-		let permissionScript = """
-		(function() {
-			// Override getUserMedia to automatically resolve with mock streams
-			const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
-			navigator.mediaDevices.getUserMedia = function(constraints) {
-				console.log('getUserMedia intercepted');
-				// For debugging - check what permissions are being requested
-				if (constraints.video) console.log('Video requested');
-				if (constraints.audio) console.log('Audio requested');
-				
-				// Auto-grant without actually accessing hardware
-				return originalGetUserMedia.call(this, constraints);
-			};
-			
-			// Make permissions API always report granted
-			if (navigator.permissions && navigator.permissions.query) {
-				const originalQuery = navigator.permissions.query;
-				navigator.permissions.query = function(permissionDesc) {
-					if (permissionDesc.name === 'camera' || permissionDesc.name === 'microphone') {
-						console.log(permissionDesc.name + ' permission auto-granted');
-						return Promise.resolve({state: 'granted', onchange: null});
-					}
-					return originalQuery.call(this, permissionDesc);
-				};
-			}
-		})();
-		"""
-
-		let script = WKUserScript(source: permissionScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-		configuration.userContentController.addUserScript(script)
+		// Apply our WebRTC permission helper using the extension
+		webView.enableWebRTCAccess()
 
 		return webView
 	}

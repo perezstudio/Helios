@@ -12,6 +12,74 @@ class SessionManager {
 	
 	private init() {}
 	
+	// Add a script to help WebRTC permissions work properly
+	private func addWebRTCEnablementScript(to userContentController: WKUserContentController) {
+		let webRTCScript = """
+		(function() {
+			// Helper to ensure WebRTC permissions work correctly
+			const originalGetUserMedia = navigator.mediaDevices?.getUserMedia;
+			if (originalGetUserMedia) {
+				// Keep track of pending promises
+				let pendingPromises = new Map();
+				
+				// Intercept navigator.permissions.query to make permission checks succeed
+				if (navigator.permissions && navigator.permissions.query) {
+					const originalQuery = navigator.permissions.query;
+					navigator.permissions.query = function(permDescriptor) {
+						if (permDescriptor.name === 'camera' || permDescriptor.name === 'microphone') {
+							return Promise.resolve({ state: 'prompt', onchange: null });
+						}
+						return originalQuery.call(this, permDescriptor);
+					};
+				}
+				
+				// Create a custom getUserMedia that works better with our permissions system
+				navigator.mediaDevices.getUserMedia = function(constraints) {
+					console.log('📷🎤 getUserMedia called with constraints:', JSON.stringify(constraints));
+					
+					// Always return a proper MediaStream to avoid TypeError
+					return originalGetUserMedia.call(navigator.mediaDevices, constraints)
+						.then(stream => {
+							console.log('📷🎤 getUserMedia succeeded');
+							return stream;
+						})
+						.catch(err => {
+							console.error('📷🎤 getUserMedia error:', err.name, err.message);
+							throw err;
+						});
+				};
+			}
+			
+			// Define navigator.mediaDevices if it doesn't exist (older browsers)
+			if (!navigator.mediaDevices) {
+				navigator.mediaDevices = {};
+			}
+			
+			// Polyfill for enumerateDevices
+			if (!navigator.mediaDevices.enumerateDevices) {
+				navigator.mediaDevices.enumerateDevices = function() {
+					// Provide fake devices to ensure sites don't fail completely
+					return Promise.resolve([
+						{
+							kind: 'audioinput',
+							deviceId: 'default-audio-input',
+							label: 'Default Microphone'
+						},
+						{
+							kind: 'videoinput',
+							deviceId: 'default-video-input',
+							label: 'Default Camera'
+						}
+					]);
+				};
+			}
+		})();
+		"""
+		
+		let script = WKUserScript(source: webRTCScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+		userContentController.addUserScript(script)
+	}
+	
 	// Set up any profile-specific user scripts
 	private func setupUserScripts(for profile: Profile, in configuration: WKWebViewConfiguration) {
 		// Clear any existing scripts
@@ -54,16 +122,6 @@ class SessionManager {
 		configuration.userContentController.addUserScript(isolationScript)
 	}
 	
-	func getConfiguration(for profile: Profile?) -> WKWebViewConfiguration {
-		queue.sync {
-			if let profile = profile {
-				return getProfileConfiguration(for: profile)
-			} else {
-				return createIsolatedConfiguration()
-			}
-		}
-	}
-	
 	private func getProfileConfiguration(for profile: Profile) -> WKWebViewConfiguration {
 		// Use existing configuration if available
 		if let existingConfig = configurationsByProfile[profile.id] {
@@ -89,11 +147,16 @@ class SessionManager {
 		let dataStore = getOrCreateDataStore(for: profile)
 		config.websiteDataStore = dataStore
 		
-		// Configure media capabilities
+		// Configure media capabilities - critical for WebRTC support
+		// Don't require user interaction for media playback
+		config.mediaTypesRequiringUserActionForPlayback = []
+		config.allowsAirPlayForMediaPlayback = true
+		
+		// Enable camera and microphone access
 		if #available(macOS 14.0, *) {
-			config.mediaTypesRequiringUserActionForPlayback = []
-		} else {
-			config.mediaTypesRequiringUserActionForPlayback = .all
+			// We don't need to set mediaDevicesRequiresUserGesture as it's not available in this version
+			// Don't limit navigations to app-bound domains - important for WebRTC
+			config.limitsNavigationsToAppBoundDomains = false 
 		}
 		
 		// Configure web content
@@ -103,6 +166,9 @@ class SessionManager {
 		
 		// Add user content controller for profile-specific scripts
 		setupUserScripts(for: profile, in: config)
+		
+		// Add WebRTC enablement script
+		addWebRTCEnablementScript(to: config.userContentController)
 		
 		// Store and return configuration
 		configurationsByProfile[profile.id] = config

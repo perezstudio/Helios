@@ -33,5 +33,9 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Helios requires camera access for video calls and WebRTC functionality</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Helios requires microphone access for audio calls and WebRTC functionality</string>
 </dict>
 </plist>

@@ -11,8 +11,9 @@ class WebKitDirectoryHelper {
 		// Ensure directory exists
 		try? FileManager.default.createDirectory(at: profilePath, withIntermediateDirectories: true, attributes: nil)
 
-		// Create a persistent data store for this profile with a unique identifier
-		let dataStore = WKWebsiteDataStore(forIdentifier: profile.id)
+		// Create a default data store which works better with permissions
+		let dataStore = WKWebsiteDataStore.default()
+		
 		return dataStore
 	}
 	

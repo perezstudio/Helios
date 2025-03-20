@@ -1,10 +1,3 @@
-//
-//  BrowserViewModel.swift
-//  Helios
-//
-//  Created by Kevin Perez on 1/12/25.
-//
-
 import Foundation
 import SwiftUI
 import WebKit
@@ -13,12 +6,25 @@ import Combine
 
 @Observable
 class BrowserViewModel {
+
 	var modelContext: ModelContext?
 	var urlInput: String = ""
 	var currentURL: URL? = nil
 	var pinnedTabs: [Tab] {
 		guard let currentProfile = currentWorkspace?.profile else { return [] }
 		return currentProfile.pinnedTabs.sorted { $0.displayOrder < $1.displayOrder }
+	}
+	
+	// Add init method to set up notification observer
+	init() {
+		// Set up notification observer for script handler cleanup
+		NotificationCenter.default.addObserver(
+			forName: NSNotification.Name("CleanupWebViewScriptHandler"),
+			object: nil,
+			queue: .main
+		) { [weak self] notification in
+			self?.handleScriptHandlerCleanup(notification)
+		}
 	}
 	var bookmarkTabs: [Tab] {
 		guard let currentWorkspace = currentWorkspace else { return [] }
@@ -746,8 +752,8 @@ class BrowserViewModel {
 			return
 		}
 		
-		// Get a fresh configuration from SessionManager
-		let configuration = SessionManager.shared.getConfiguration(for: profile)
+		// Get a fresh configuration for this profile
+		let configuration = getProfileConfiguration(for: profile)
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		
 		// Initialize collections if needed
@@ -996,6 +1002,26 @@ class BrowserViewModel {
 		}
 	}
 	
+	// Handle cleanup of script message handlers via notification
+	@MainActor
+	private func handleScriptHandlerCleanup(_ notification: Notification) {
+		guard let userInfo = notification.userInfo,
+			  let webViewId = userInfo["webViewId"] as? UUID,
+			  let handlerName = userInfo["handlerName"] as? String else {
+			return
+		}
+		
+		// Safely access all profile WebViews on the main thread
+		for (profileId, webViews) in webViewsByProfile {
+			if let webView = webViews[webViewId] {
+				// Safely remove the script message handler
+				webView.configuration.userContentController.removeScriptMessageHandler(forName: handlerName)
+				print("Successfully cleaned up script handler \(handlerName) for WebView \(webViewId)")
+				return
+			}
+		}
+	}
+	
 	private func cleanupUnusedWebViews(for profile: Profile) async {
 		let profileId = profile.id
 		
@@ -1010,6 +1036,19 @@ class BrowserViewModel {
 				webView.loadHTMLString("", baseURL: nil)
 				webViewsByProfile[profileId]?.removeValue(forKey: webViewId)
 				navigationDelegatesByProfile[profileId]?.removeValue(forKey: webViewId)
+			}
+		}
+	}
+	
+	// Safely remove a script message handler from a WebView
+	@MainActor
+	func removeScriptMessageHandler(from webViewId: UUID, name: String) {
+		// Find the WebView across all profiles
+		for (_, webViews) in webViewsByProfile {
+			if let webView = webViews[webViewId] {
+				// Safely remove the handler
+				webView.configuration.userContentController.removeScriptMessageHandler(forName: name)
+				break
 			}
 		}
 	}
@@ -1170,8 +1209,8 @@ class BrowserViewModel {
 			tab.webViewId = UUID()
 		}
 		
-		// Get configuration from SessionManager
-		let configuration = SessionManager.shared.getConfiguration(for: profile)
+		// Get configuration for this profile
+		let configuration = getProfileConfiguration(for: profile)
 		let webView = WKWebView(frame: .zero, configuration: configuration)
 		
 		// Set up WebView with profile

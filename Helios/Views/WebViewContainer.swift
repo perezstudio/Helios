@@ -16,6 +16,9 @@ struct WebViewContainer: NSViewRepresentable {
 		webView.frame = .zero
 		webView.allowsMagnification = true
 		
+		// Enable WebRTC access by adding our permission helper script
+		webView.enableWebRTCAccess()
+		
 		// Set up PiP support
 		if let videoElement = webView.configuration.userContentController.userScripts.first(where: { $0.source.contains("video") }) {
 			setupPictureInPicture(for: webView)
